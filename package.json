@@ -1,0 +1,31 @@
+{
+  "name": "exam-workbench",
+  "productName": "备考工作台",
+  "version": "0.1.0",
+  "description": "基于 Webview 的本地备考工作台：刷题 + 只读同步个人练习数据，输出给本地 AI agent 分析（非官方项目）",
+  "license": "MIT",
+  "keywords": [
+    "exam",
+    "study",
+    "webview",
+    "electron",
+    "ai-agent",
+    "shenlun",
+    "xingce"
+  ],
+  "type": "module",
+  "main": "src/main.mjs",
+  "private": true,
+  "scripts": {
+    "start": "electron .",
+    "selftest": "electron . --self-test",
+    "pack": "electron-packager . exam-workbench --platform=win32 --arch=x64 --out=dist --overwrite --prune=true --ignore=dist --ignore=.selftest"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "devDependencies": {
+    "@electron/packager": "^20.3.0",
+    "electron": "^44.7.0"
+  }
+}

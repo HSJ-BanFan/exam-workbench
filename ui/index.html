@@ -1,0 +1,129 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'; img-src 'self' data:;" />
+    <title>备考工作台</title>
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body>
+    <aside class="rail">
+      <div class="brand">
+        <div class="brand-mark">考</div>
+        <div>
+          <div class="brand-name">备考工作台</div>
+          <div class="brand-sub">webview · 只读同步</div>
+        </div>
+      </div>
+      <nav class="nav">
+        <button class="nav-item active" data-view="practice">刷题</button>
+        <button class="nav-item" data-view="sync">数据同步</button>
+        <button class="nav-item" data-view="settings">设置</button>
+      </nav>
+      <div class="rail-footer">
+        <div class="pill" id="login-pill"><span class="dot"></span>登录状态未知</div>
+        <div class="pill" id="api-pill"><span class="dot"></span>接口未就绪</div>
+        <div class="hint" id="rail-version"></div>
+      </div>
+    </aside>
+
+    <main class="stage">
+      <section class="view active" id="view-practice">
+        <div class="toolbar">
+          <button class="btn" id="btn-home">题库首页</button>
+          <button class="btn" id="btn-reload">刷新</button>
+          <button class="btn ghost" id="btn-browser">在浏览器打开</button>
+          <span class="toolbar-note">在此登录后即可同步；登录态保存在本机应用目录。</span>
+        </div>
+        <webview id="fenbi" src="https://www.fenbi.com/spa/tiku/guide/redirect" partition="persist:fenbi" allowpopups></webview>
+      </section>
+
+      <section class="view" id="view-sync">
+        <div class="grid">
+          <div class="card">
+            <h2>同步状态</h2>
+            <div class="kv">
+              <div><span>最近同步</span><b id="last-sync">—</b></div>
+              <div><span>输出目录</span><b id="sync-dir" class="mono">—</b></div>
+              <div><span>接口地址</span><b id="api-base" class="mono">—</b></div>
+            </div>
+            <div class="row">
+              <button class="btn primary" id="btn-sync">立即同步</button>
+              <label class="check"><input type="checkbox" id="chk-full" /> 全量刷新（重新拉取全部题解）</label>
+            </div>
+            <div class="row">
+              <button class="btn ghost" id="btn-open-dir">打开数据目录</button>
+              <button class="btn ghost" id="btn-copy-dir">复制路径</button>
+            </div>
+          </div>
+
+          <div class="card">
+            <h2>本机同步接口（给 Codex / Claude）</h2>
+            <p class="muted">应用在 127.0.0.1 上暴露只读接口；数据同时写入输出目录，任选其一使用。</p>
+            <ul class="api-list">
+              <li><code>GET /api/status</code><span>同步状态、最近结果</span></li>
+              <li><code>GET /api/datasets</code><span>数据集与勾选状态</span></li>
+              <li><code>POST /api/sync</code><span>触发一次同步（等它跑完返回摘要）</span></li>
+              <li><code>GET /api/manifest</code><span>输出目录清单</span></li>
+            </ul>
+            <div class="row">
+              <button class="btn ghost" id="btn-copy-curl">复制 PowerShell 同步命令</button>
+            </div>
+            <p class="muted" style="margin-top: 12px">题库接口（只读，供 agent 查目录 / 卷子 / 题目）：</p>
+            <ul class="api-list">
+              <li><code>GET /api/tiku/labels</code><span>分类树（?prefix=xingce|shenlun）</span></li>
+              <li><code>GET /api/tiku/papers</code><span>试卷列表（?labelId=&amp;page=&amp;pageSize=，≤20 条/页）</span></li>
+              <li><code>GET /api/tiku/paper-sheet</code><span>试卷题目清单（?paperId=，含 questionIds）</span></li>
+              <li><code>GET /api/tiku/questions</code><span>按题目 ID 取内容（?ids=，≤20）</span></li>
+              <li><code>GET /api/tiku/question-meta</code><span>全站正确率 / 易错项（?ids=，≤50）</span></li>
+            </ul>
+            <div class="row">
+              <button class="btn ghost" id="btn-copy-tiku">复制题库查询示例</button>
+            </div>
+          </div>
+
+          <div class="card wide">
+            <h2>同步内容选择</h2>
+            <p class="muted">勾选要暴露给本地 agent 的数据子目录；改动即时保存，下次同步生效。</p>
+            <div id="dataset-list" class="dataset-list"></div>
+          </div>
+
+          <div class="card wide">
+            <h2>同步日志</h2>
+            <pre id="sync-log" class="log">（尚未同步）</pre>
+          </div>
+        </div>
+      </section>
+
+      <section class="view" id="view-settings">
+        <div class="grid">
+          <div class="card wide">
+            <h2>设置</h2>
+            <div class="form">
+              <label>数据输出目录
+                <div class="row">
+                  <input id="inp-dir" type="text" class="mono" />
+                  <button class="btn ghost" id="btn-choose">选择…</button>
+                </div>
+              </label>
+              <label>本机接口端口（重启应用后生效）
+                <input id="inp-port" type="number" min="1024" max="65535" />
+              </label>
+              <label>接口令牌（留空表示仅限本机、不校验；设置后请求需带 X-Sync-Token）
+                <input id="inp-token" type="text" />
+              </label>
+              <label class="check"><input type="checkbox" id="chk-auto" /> 启动应用时自动同步一次</label>
+              <div class="row">
+                <button class="btn primary" id="btn-save">保存设置</button>
+                <span class="muted" id="save-hint"></span>
+              </div>
+            </div>
+            <p class="muted">会话引导文件：<span id="bootstrap-path" class="mono"></span>（仅当应用内未登录时用于导入一次）</p>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <script src="app.js"></script>
+  </body>
+</html>
