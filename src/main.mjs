@@ -439,6 +439,10 @@ function registerIpc() {
     if (/^https?:/i.test(String(url))) await shell.openExternal(String(url));
   });
   ipcMain.handle("tiku:home", () => TIKU_HOME);
+  // 界面与 HTTP 层共用 handleNaoku，避免把脑库业务逻辑复制到 UI 侧。
+  ipcMain.handle("naoku:query", (_e, { pathname, params } = {}) =>
+    handleNaoku({ pathname, query: new URLSearchParams(params ?? {}) })
+  );
 }
 
 // ---------------------------------------------------------------- api server

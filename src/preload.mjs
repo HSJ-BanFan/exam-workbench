@@ -10,6 +10,7 @@ contextBridge.exposeInMainWorld("desk", {
   openPath: (p) => ipcRenderer.invoke("open:path", p),
   openExternal: (url) => ipcRenderer.invoke("open:external", url),
   tikuHome: () => ipcRenderer.invoke("tiku:home"),
+  naoku: (pathname, params) => ipcRenderer.invoke("naoku:query", { pathname, params }),
   onSyncProgress: (cb) => {
     const listener = (_event, payload) => cb(payload);
     ipcRenderer.on("sync:progress", listener);
