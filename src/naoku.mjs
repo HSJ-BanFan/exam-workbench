@@ -258,6 +258,11 @@ export async function buildIndex({ vaultDir, log = logNothing }) {
     else 材料未命中++;
   }
 
+  // 反查结果的顺序取决于扫描顺序，按 qid 排一次让索引可复现。
+  const byQid = (a, b) => Number(a) - Number(b);
+  for (const row of 考点) row.真题.sort(byQid);
+  for (const row of 材料) row.真题.sort(byQid);
+
   const mismatch = 考点.filter((r) => r.题数 !== r.真题.length);
   if (mismatch.length) {
     const sample = mismatch.slice(0, 5).map((r) => `${r.考点}(frontmatter ${r.题数}/反查 ${r.真题.length})`);
@@ -419,7 +424,14 @@ export function readNote({ vaultDir, relPath }) {
   if (relPath.includes("\0")) throw new Error("path 非法");
   if (path.isAbsolute(relPath)) throw new Error("path 必须是 vault 内的相对路径");
   const root = fs.realpathSync(path.resolve(vaultDir));
-  const real = fs.realpathSync(path.resolve(root, relPath));
+  const resolved = path.resolve(root, relPath);
+  if (!inside(root, resolved)) throw new Error("path 越界：只允许读取脑库目录内的文件");
+  let real;
+  try {
+    real = fs.realpathSync(resolved);
+  } catch {
+    throw new Error(`脑库中不存在该文件：${relPath}`);
+  }
   if (!inside(root, real)) throw new Error("path 越界：只允许读取脑库目录内的文件");
   if (!fs.statSync(real).isFile()) throw new Error("path 不是文件");
   return { path: toPosix(path.relative(root, real)), content: fs.readFileSync(real, "utf8") };
