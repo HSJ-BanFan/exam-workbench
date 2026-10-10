@@ -222,7 +222,15 @@ async function loadNaokuStatus() {
   };
   const counts = status.counts ?? {};
   add("副本路径", status.vaultDir ?? "—", true);
-  add("索引状态", status.indexed ? "已就绪" : status.imported ? "已导入，尚未建索引" : "未导入");
+  // 索引文件还在、副本却被移走时，说「已就绪」会和下面的导入按钮互相打脸。
+  const indexLabel = !status.imported && status.indexed
+    ? "副本不在（索引是旧数据，需重新导入）"
+    : status.indexed
+      ? "已就绪"
+      : status.imported
+        ? "已导入，尚未建索引"
+        : "未导入";
+  add("索引状态", indexLabel);
   add(
     "真题 / 考点 / 材料",
     status.indexed ? `${counts.真题 ?? 0} / ${counts.考点 ?? 0} / ${counts.材料 ?? 0}` : "—"
