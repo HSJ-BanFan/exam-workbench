@@ -321,7 +321,13 @@ export function writeIndex({ outDir, index, manifest = {} }) {
     模块列表: index.模块列表 ?? [],
     vault: index.vault ?? {},
     warnings: index.warnings ?? [],
-    files: ["脑库索引/真题.json", "脑库索引/考点.json", "脑库索引/材料.json", "脑库索引/manifest.json"],
+    files: [
+      "脑库索引/真题.json",
+      "脑库索引/考点.json",
+      "脑库索引/材料.json",
+      "脑库索引/manifest.json",
+      "脑库索引/README.md",
+    ],
     ...manifest,
   };
   writeJson("manifest.json", finalManifest);
@@ -332,10 +338,14 @@ export function writeIndex({ outDir, index, manifest = {} }) {
 function renderIndexReadme(manifest) {
   const vaultDir = manifest.vault?.dir ?? "-";
   const commit = manifest.vault?.commit ? manifest.vault.commit.slice(0, 10) : "-";
+  // 本文件落在用户库目录里，frontmatter 必须带库校验器要求的 type/status/sample 三件套。
   return [
     "---",
     "type: generated",
+    "status: active",
+    "sample: false",
     '来源: "考公脑库（第三方，CC BY-NC 4.0）"',
+    `同步时间: "${manifest.generatedAtText}"`,
     "---",
     "",
     "# 考公脑库索引",
