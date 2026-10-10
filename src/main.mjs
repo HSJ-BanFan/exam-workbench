@@ -5,9 +5,10 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { runSync, readManifest } from "./sync.mjs";
-import { DATASETS, DATASET_IDS, defaultSelection } from "./datasets.mjs";
+import { DATASETS, DATASET_IDS, defaultSelection, datasetById } from "./datasets.mjs";
 import { createApiServer } from "./server.mjs";
 import { makeClient } from "./fenbi-api.mjs";
+import { buildIndex, writeIndex, searchIndex, forQuestion, readNote, importVault, DEFAULT_REPO } from "./naoku.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, "..");
@@ -38,6 +39,7 @@ function defaultBootstrapPath() {
 
 const isSelfTest = process.argv.includes("--self-test");
 const isSyncOnly = process.argv.includes("--sync-only");
+const isNaokuImport = process.argv.includes("--naoku-import");
 const SELFTEST_DIR = process.env.SELFTEST_DIR ?? path.join(ROOT, ".selftest");
 
 // ---------------------------------------------------------------- config
@@ -47,13 +49,16 @@ function configPath() {
 }
 
 function loadConfig() {
+  const dataDir = defaultDataDir();
   const defaults = {
-    dataDir: defaultDataDir(),
+    dataDir,
     port: 8791,
     token: "",
     datasets: defaultSelection(),
     autoSyncOnLaunch: true,
     bootstrapSessionPath: defaultBootstrapPath(),
+    naokuDir: path.join(dataDir, "考公脑库"),
+    naokuRepo: DEFAULT_REPO,
   };
   try {
     const saved = JSON.parse(fs.readFileSync(configPath(), "utf8"));
@@ -87,6 +92,150 @@ const syncState = {
 
 let win = null;
 let apiServer = null;
+
+// ---------------------------------------------------------------- naoku
+
+function resolveNaokuDir() {
+  return config.naokuDir?.trim() ? path.resolve(config.naokuDir) : path.join(config.dataDir, "考公脑库");
+}
+
+function naokuIndexDir() {
+  return path.join(config.dataDir, "脑库索引");
+}
+
+function naokuLog(message) {
+  console.log(`[naoku] ${message}`);
+  broadcast("sync:progress", { type: "log", message: `脑库：${message}`, at: Date.now() });
+}
+
+// 索引 1 万多条，按文件 mtime 缓存，避免每个请求都重读 20MB JSON。
+let naokuCache = null;
+
+function loadNaokuIndex() {
+  const dir = naokuIndexDir();
+  const parts = { 真题: "真题.json", 考点: "考点.json", 材料: "材料.json" };
+  const paths = Object.values(parts).map((f) => path.join(dir, f));
+  if (!paths.every((p) => fs.existsSync(p))) return null;
+  const stamp = Math.max(...paths.map((p) => fs.statSync(p).mtimeMs));
+  if (naokuCache?.stamp === stamp) return naokuCache.index;
+  const index = {};
+  for (const [key, file] of Object.entries(parts)) {
+    index[key] = JSON.parse(fs.readFileSync(path.join(dir, file), "utf8"));
+  }
+  naokuCache = { stamp, index };
+  return index;
+}
+
+function readNaokuManifest() {
+  try {
+    return JSON.parse(fs.readFileSync(path.join(naokuIndexDir(), "manifest.json"), "utf8"));
+  } catch {
+    return null;
+  }
+}
+
+const NAOKU_ENDPOINTS = [
+  "status",
+  "import",
+  "index",
+  "search?type=&q=&模块=&大类=&地区=&年份=&考点=&limit=",
+  "note?path=",
+  "for-question?qid=",
+  "points?模块=&大类=&limit=",
+];
+
+async function handleNaoku({ pathname, query }) {
+  const vaultDir = resolveNaokuDir();
+  const bad = (message) => ({ httpStatus: 400, body: { ok: false, error: message } });
+  const missingIndex = () => ({
+    httpStatus: 404,
+    body: { ok: false, error: "尚无脑库索引，先运行 POST /api/naoku/index（或应用内同步 naoku-index）" },
+  });
+  const withIndex = (fn) => {
+    const index = loadNaokuIndex();
+    if (!index) return missingIndex();
+    try {
+      return { ok: true, ...fn(index) };
+    } catch (error) {
+      return bad(String(error?.message ?? error));
+    }
+  };
+
+  switch (pathname) {
+    case "status": {
+      const manifest = readNaokuManifest();
+      return {
+        ok: true,
+        vaultDir,
+        repo: config.naokuRepo,
+        imported: fs.existsSync(vaultDir),
+        indexed: Boolean(manifest),
+        indexDir: naokuIndexDir(),
+        counts: manifest?.counts ?? null,
+        vaultCommit: manifest?.vault?.commit ?? null,
+        generatedAtText: manifest?.generatedAtText ?? null,
+        warnings: manifest?.warnings ?? [],
+      };
+    }
+    case "import":
+      return { ok: true, ...(await importVault({ dir: vaultDir, repo: config.naokuRepo, log: naokuLog })) };
+    case "index": {
+      if (!fs.existsSync(vaultDir)) {
+        return { httpStatus: 409, body: { ok: false, error: `脑库未导入（${vaultDir}），先运行 POST /api/naoku/import` } };
+      }
+      const index = await buildIndex({ vaultDir, log: naokuLog });
+      const manifest = writeIndex({ outDir: naokuIndexDir(), index });
+      naokuCache = null;
+      return {
+        ok: true,
+        counts: index.counts,
+        模块列表: index.模块列表,
+        warnings: index.warnings,
+        vault: index.vault,
+        generatedAtText: manifest.generatedAtText,
+      };
+    }
+    case "search":
+      return withIndex((index) =>
+        searchIndex(index, {
+          type: query.get("type") ?? "真题",
+          q: query.get("q") ?? undefined,
+          模块: query.get("模块") ?? undefined,
+          大类: query.get("大类") ?? undefined,
+          地区: query.get("地区") ?? undefined,
+          年份: query.get("年份") ?? undefined,
+          考点: query.get("考点") ?? undefined,
+          limit: query.get("limit") ?? undefined,
+        })
+      );
+    case "points":
+      return withIndex((index) =>
+        searchIndex(index, {
+          type: "考点",
+          模块: query.get("模块") ?? undefined,
+          大类: query.get("大类") ?? undefined,
+          limit: query.get("limit") ?? undefined,
+        })
+      );
+    case "note": {
+      if (!fs.existsSync(vaultDir)) {
+        return { httpStatus: 409, body: { ok: false, error: `脑库未导入（${vaultDir}），先运行 POST /api/naoku/import` } };
+      }
+      try {
+        return { ok: true, ...readNote({ vaultDir, relPath: query.get("path") }) };
+      } catch (error) {
+        return bad(String(error?.message ?? error));
+      }
+    }
+    case "for-question":
+      return withIndex((index) => forQuestion(index, query.get("qid")));
+    default:
+      return {
+        httpStatus: 404,
+        body: { ok: false, error: "未知脑库接口", endpoints: NAOKU_ENDPOINTS },
+      };
+  }
+}
 
 function broadcast(channel, payload) {
   try {
@@ -166,13 +315,14 @@ async function doSync({ datasets, full = false, source = "app" } = {}) {
   };
   broadcast("sync:progress", { type: "start", at: Date.now() });
   try {
+    const selected = Array.isArray(datasets) && datasets.length ? datasets : config.datasets;
+    const needsFenbi = selected.some((id) => datasetById(id)?.source !== "naoku");
     const ses = fenbiSession();
     await bootstrapCookies(ses, log);
     const cookieHeader = await readCookieHeader(ses);
-    if (!/sess=/.test(cookieHeader)) {
+    if (needsFenbi && !/sess=/.test(cookieHeader)) {
       throw new Error("未登录：请先在「刷题」页登录粉笔账号");
     }
-    const selected = Array.isArray(datasets) && datasets.length ? datasets : config.datasets;
     log(`开始同步：${selected.join(", ")}${full ? "（全量）" : ""}`);
     const summary = await runSync({
       cookieHeader,
@@ -180,6 +330,7 @@ async function doSync({ datasets, full = false, source = "app" } = {}) {
       datasets: selected,
       full,
       log,
+      naokuDir: resolveNaokuDir(),
     });
     syncState.lastSummary = summary;
     syncState.lastSyncAt = Date.now();
@@ -233,6 +384,8 @@ function publicConfig() {
     datasets: config.datasets,
     autoSyncOnLaunch: config.autoSyncOnLaunch,
     bootstrapSessionPath: config.bootstrapSessionPath,
+    naokuDir: resolveNaokuDir(),
+    naokuRepo: config.naokuRepo,
     apiBase: `http://127.0.0.1:${config.port}`,
     version: APP_VERSION,
   };
@@ -245,6 +398,8 @@ function registerIpc() {
     if (Number.isInteger(patch.port) && patch.port >= 1024 && patch.port <= 65535) config.port = patch.port;
     if (typeof patch.token === "string") config.token = patch.token.trim();
     if (typeof patch.autoSyncOnLaunch === "boolean") config.autoSyncOnLaunch = patch.autoSyncOnLaunch;
+    if (typeof patch.naokuDir === "string" && patch.naokuDir.trim()) config.naokuDir = patch.naokuDir.trim();
+    if (typeof patch.naokuRepo === "string" && patch.naokuRepo.trim()) config.naokuRepo = patch.naokuRepo.trim();
     if (Array.isArray(patch.datasets)) config.datasets = sanitizeDatasets(patch.datasets, config.datasets);
     saveConfig(config);
     broadcast("config:changed", publicConfig());
@@ -303,6 +458,7 @@ async function startApi() {
         }),
         manifest: async () => readManifest(config.dataDir),
         sync: async ({ datasets, full }) => doSync({ datasets, full, source: "api" }),
+        naoku: handleNaoku,
         tiku: async ({ pathname, query }) => {
           const prefix = query.get("prefix") === "shenlun" ? "shenlun" : "xingce";
           const client = await sessionClient(prefix);
@@ -421,6 +577,20 @@ app.userAgentFallback = CHROME_UA;
 
 app.whenReady().then(async () => {
   registerIpc();
+  if (isNaokuImport) {
+    // 无窗口导入：稀疏克隆/更新脑库副本，并顺带重建索引，供外部脚本调用。
+    try {
+      const result = await importVault({ dir: resolveNaokuDir(), repo: config.naokuRepo, log: naokuLog });
+      const index = await buildIndex({ vaultDir: result.dir, log: naokuLog });
+      const manifest = writeIndex({ outDir: naokuIndexDir(), index });
+      console.log(JSON.stringify({ ...result, counts: index.counts, warnings: index.warnings, generatedAtText: manifest.generatedAtText }, null, 2));
+      app.exit(0);
+    } catch (error) {
+      console.error(`[naoku] 导入失败：${error?.message ?? error}`);
+      app.exit(1);
+    }
+    return;
+  }
   if (isSyncOnly) {
     // 无窗口同步模式：供夜间自动化使用（读取本机已登录会话 → 同步到数据目录 → 退出）。
     try {

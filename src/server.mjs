@@ -48,6 +48,15 @@ export function createApiServer({ port, host = "127.0.0.1", token = "", handlers
         });
         return send(result?.httpStatus ?? 200, result?.body ?? result);
       }
+      if (url.pathname.startsWith("/api/naoku/")) {
+        const pathname = url.pathname.slice("/api/naoku/".length);
+        const expected = pathname === "import" || pathname === "index" ? "POST" : "GET";
+        if (req.method !== expected) {
+          return send(405, { ok: false, error: `${pathname} 只接受 ${expected}` });
+        }
+        const result = await handlers.naoku({ pathname, query: url.searchParams, method: req.method });
+        return send(result?.httpStatus ?? 200, result?.body ?? result);
+      }
       if (req.method === "POST" && url.pathname === "/api/sync") {
         const body = await readBody(req);
         const datasetsParam = url.searchParams.get("datasets");
@@ -74,6 +83,13 @@ export function createApiServer({ port, host = "127.0.0.1", token = "", handlers
           "GET /api/tiku/paper-sheet?prefix=&paperId=",
           "GET /api/tiku/questions?prefix=&ids=",
           "GET /api/tiku/question-meta?prefix=&ids=",
+          "GET /api/naoku/status",
+          "POST /api/naoku/import",
+          "POST /api/naoku/index",
+          "GET /api/naoku/search?type=&q=&模块=&大类=&地区=&年份=&考点=&limit=",
+          "GET /api/naoku/note?path=",
+          "GET /api/naoku/for-question?qid=",
+          "GET /api/naoku/points?模块=&大类=&limit=",
         ],
       });
     } catch (error) {
