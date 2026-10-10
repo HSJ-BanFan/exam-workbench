@@ -81,8 +81,356 @@ async function refresh() {
 }
 
 function switchView(name) {
+  const previous = document.querySelector(".view.active")?.id;
   document.querySelectorAll(".nav-item").forEach((b) => b.classList.toggle("active", b.dataset.view === name));
   document.querySelectorAll(".view").forEach((v) => v.classList.toggle("active", v.id === `view-${name}`));
+  if (name === "naoku" && previous !== "view-naoku") loadNaoku();
+}
+
+// ---------------------------------------------------------------- 脑库
+
+const naokuState = { tree: [], importing: false };
+
+function escapeHtml(text) {
+  const map = { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" };
+  return String(text ?? "").replace(/[&<>"]/g, (c) => map[c]);
+}
+
+function brief(text, max) {
+  const value = String(text ?? "");
+  return value.length > max ? `${value.slice(0, max)}…` : value;
+}
+
+// 脑库笔记里的 [[链接]]：只有题号与考点名做成按钮，其余前缀（15-材料 等）只显示别名。
+function wikilinkHtml(inner) {
+  const [rawTarget, rawAlias] = String(inner).split("|");
+  const target = rawTarget.split("#")[0].trim().replace(/\\/g, "/");
+  const label = (rawAlias ?? rawTarget).trim();
+  if (target.startsWith("10-真题/")) {
+    const qid = (target.split("/").pop() ?? "").match(/^\d+/)?.[0] ?? "";
+    return /^\d+$/.test(qid) ? `<button class="wikilink" data-qid="${qid}">${label}</button>` : label;
+  }
+  if (target.startsWith("20-考点/")) {
+    const point = (target.split("/").pop() ?? "").replace(/\.md$/, "");
+    return point ? `<button class="wikilink" data-point="${point}">${label}</button>` : label;
+  }
+  return label;
+}
+
+function inlineMarkdown(text) {
+  return text
+    .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
+    .replace(/`([^`]+)`/g, "<code>$1</code>")
+    .replace(/\[\[([^\]]+)\]\]/g, (_match, inner) => wikilinkHtml(inner))
+    .replace(/&lt;img\b[^<]*?&gt;/gi, (tag) =>
+      /flag=(&quot;tex&quot;|'tex'|tex)/.test(tag)
+        ? '<span class="imgph">［公式］</span>'
+        : '<span class="imgph">［图］</span>'
+    );
+}
+
+// 笔记是第三方 markdown，可能含任意 HTML：先整体转义再做白名单转换。
+// 只有本函数的输出可以进 innerHTML，其余拼接一律走 escapeHtml。
+function renderMarkdown(raw) {
+  const body = String(raw ?? "").replace(/^\uFEFF?---\r?\n[\s\S]*?\r?\n---\r?\n?/, "");
+  const html = [];
+  let inList = false;
+  const closeList = () => {
+    if (inList) {
+      html.push("</ul>");
+      inList = false;
+    }
+  };
+  for (const line of escapeHtml(body).split(/\r?\n/)) {
+    const text = line.trim();
+    if (!text) {
+      closeList();
+      continue;
+    }
+    const heading = text.match(/^(#{1,6})\s+(.+)$/);
+    if (heading) {
+      closeList();
+      // 正文里的 # 级到 ###### 级统一落到 h3~h6，避免和卡片自己的 h2 抢层级。
+      const tag = `h${Math.min(heading[1].length + 2, 6)}`;
+      html.push(`<${tag}>${inlineMarkdown(heading[2])}</${tag}>`);
+      continue;
+    }
+    if (/^-{3,}$/.test(text)) {
+      closeList();
+      html.push("<hr />");
+      continue;
+    }
+    const bullet = text.match(/^[-*]\s+(.+)$/);
+    if (bullet) {
+      if (!inList) {
+        html.push("<ul>");
+        inList = true;
+      }
+      html.push(`<li>${inlineMarkdown(bullet[1])}</li>`);
+      continue;
+    }
+    closeList();
+    html.push(`<p>${inlineMarkdown(text)}</p>`);
+  }
+  closeList();
+  return html.join("\n");
+}
+
+async function naokuCall(pathname, params) {
+  const result = await window.desk.naoku(pathname, params);
+  // HTTP 层的失败响应形状是 { httpStatus, body }，走 IPC 只带 body 回来。
+  return result?.body ?? result ?? { ok: false, error: "脑库接口无响应" };
+}
+
+async function loadNaokuStatus() {
+  const status = await naokuCall("status");
+  const kv = $("#naoku-kv");
+  kv.textContent = "";
+  const add = (label, value, mono) => {
+    const row = document.createElement("div");
+    const key = document.createElement("span");
+    const val = document.createElement("b");
+    key.textContent = label;
+    if (mono) val.className = "mono";
+    val.textContent = value;
+    row.append(key, val);
+    kv.appendChild(row);
+  };
+  const counts = status.counts ?? {};
+  add("副本路径", status.vaultDir ?? "—", true);
+  add("索引状态", status.indexed ? "已就绪" : status.imported ? "已导入，尚未建索引" : "未导入");
+  add(
+    "真题 / 考点 / 材料",
+    status.indexed ? `${counts.真题 ?? 0} / ${counts.考点 ?? 0} / ${counts.材料 ?? 0}` : "—"
+  );
+  add("索引生成时间", status.generatedAtText ?? "—");
+  const warnings = $("#naoku-warnings");
+  warnings.textContent = "";
+  for (const text of status.warnings ?? []) {
+    const li = document.createElement("li");
+    li.textContent = text;
+    warnings.appendChild(li);
+  }
+  warnings.hidden = !warnings.childElementCount;
+  const ready = Boolean(status.imported && status.indexed);
+  $("#naoku-import-row").hidden = ready;
+  return status;
+}
+
+async function loadNaoku() {
+  const status = await loadNaokuStatus();
+  const ready = Boolean(status.imported && status.indexed);
+  for (const id of ["naoku-block-wrong", "naoku-block-lookup", "naoku-block-points"]) {
+    $(`#${id}`).hidden = !ready;
+  }
+  if (!ready) return;
+  await Promise.all([loadNaokuWrongHits(), loadNaokuTree()]);
+}
+
+async function loadNaokuWrongHits() {
+  const list = $("#naoku-wrong-list");
+  const summary = $("#naoku-wrong-summary");
+  list.textContent = "";
+  const result = await naokuCall("wrong-hits");
+  if (!result.ok) {
+    summary.textContent = result.error ?? "错题命中读取失败";
+    return;
+  }
+  if (result.说明) {
+    summary.textContent = result.说明;
+    return;
+  }
+  const coverage = "其余属脑库覆盖范围外（脑库只覆盖资料分析和判断推理两个模块）。";
+  summary.textContent = `共 ${result.total} 道错题，${result.hitCount} 道有脑库标注。${result.missCount ? coverage : ""}`;
+  if (!result.hits?.length) {
+    const empty = document.createElement("p");
+    empty.className = "muted";
+    empty.textContent = "当前错题没有命中脑库标注。";
+    list.appendChild(empty);
+    return;
+  }
+  for (const hit of result.hits) {
+    const row = document.createElement("button");
+    row.className = "hit";
+    row.dataset.qid = hit.qid;
+    row.innerHTML =
+      `<span class="mono">${escapeHtml(hit.qid)}</span>` +
+      `<span>${escapeHtml(hit.考点 || `${hit.模块} / ${hit.大类}`)}</span>`;
+    list.appendChild(row);
+  }
+}
+
+async function loadNaokuTree() {
+  const result = await naokuCall("tree");
+  const moduleSelect = $("#sel-naoku-module");
+  moduleSelect.textContent = "";
+  naokuState.tree = result.ok ? result.模块 ?? [] : [];
+  if (!naokuState.tree.length) {
+    $("#naoku-points-count").textContent = result.error ?? "没有可浏览的考点";
+    return;
+  }
+  for (const item of naokuState.tree) {
+    const option = document.createElement("option");
+    option.value = item.模块;
+    option.textContent = item.模块;
+    moduleSelect.appendChild(option);
+  }
+  fillCatOptions();
+  await loadNaokuPoints();
+}
+
+function fillCatOptions() {
+  const catSelect = $("#sel-naoku-cat");
+  const entry = naokuState.tree.find((item) => item.模块 === $("#sel-naoku-module").value);
+  catSelect.textContent = "";
+  for (const item of entry?.大类 ?? []) {
+    const option = document.createElement("option");
+    option.value = item.大类;
+    option.textContent = `${item.大类}（考点 ${item.考点数} / 真题 ${item.真题数}）`;
+    catSelect.appendChild(option);
+  }
+}
+
+function pointRow(item, open) {
+  const wrap = document.createElement("div");
+  wrap.className = open ? "point open" : "point";
+  const head = document.createElement("button");
+  head.className = "point-head";
+  head.innerHTML =
+    `<span class="point-name">${escapeHtml(item.考点)}</span>` +
+    `<span class="badge">${Number(item.题数) || 0} 题</span>` +
+    `<span class="point-meta">${escapeHtml(brief(item.母题, 46) || "（索引里没有母题摘要）")}</span>`;
+  const body = document.createElement("div");
+  body.className = "point-body";
+  body.hidden = !open;
+  body.innerHTML = `<p>${escapeHtml(item.母题 || "（索引里没有母题摘要）")}</p>`;
+  const label = document.createElement("div");
+  label.className = "muted";
+  label.textContent = "该考点的真题题号（点击查看标注）";
+  const qids = document.createElement("div");
+  qids.className = "qids";
+  qids.innerHTML = (item.真题 ?? [])
+    .filter((qid) => /^\d+$/.test(String(qid)))
+    .map((qid) => `<button class="wikilink" data-qid="${qid}">${qid}</button>`)
+    .join("");
+  if (!qids.childElementCount) qids.innerHTML = '<span class="muted">（索引里没有可跳转的真题）</span>';
+  body.append(label, qids);
+  head.addEventListener("click", () => {
+    body.hidden = !body.hidden;
+    wrap.classList.toggle("open", !body.hidden);
+  });
+  wrap.append(head, body);
+  return wrap;
+}
+
+// [[考点]] 链接只带考点名，索引里的考点名取自 frontmatter，可能与笔记文件名不同。
+// 过滤是包含匹配（母题也会命中），所以要挑精确相等的那条，不能拿第一条。
+async function resolveNaokuPoint(name) {
+  const hit = await naokuCall("search", { type: "考点", 考点: name, limit: "200" });
+  const items = hit.items ?? [];
+  const fileName = (item) => String(item.path ?? "").split("/").pop()?.replace(/\.md$/, "") ?? "";
+  return items.find((item) => item.考点 === name) ?? items.find((item) => fileName(item) === name) ?? null;
+}
+
+async function loadNaokuPoints({ focus, focusRow } = {}) {
+  const list = $("#naoku-points");
+  const hint = $("#naoku-points-count");
+  list.textContent = "";
+  const result = await naokuCall("points", {
+    模块: $("#sel-naoku-module").value,
+    大类: $("#sel-naoku-cat").value,
+    sort: "题数",
+    limit: "200",
+  });
+  if (!result.ok) {
+    hint.textContent = result.error ?? "考点读取失败";
+    return;
+  }
+  let items = result.items ?? [];
+  let focusName = focus;
+  let prepended = false;
+  if (focus && !items.some((item) => item.考点 === focus)) {
+    // 从笔记里的 [[考点]] 跳过来时，该考点可能落在按题数取的前 200 条之外。
+    const row = focusRow ?? (await resolveNaokuPoint(focus));
+    if (row) {
+      items = [row, ...items];
+      focusName = row.考点;
+      prepended = true;
+    }
+  }
+  hint.textContent =
+    `共 ${result.total} 个考点，按题数显示前 ${items.length} 个` + (prepended ? "（含 1 条不在前 200 内）" : "");
+  for (const item of items) list.appendChild(pointRow(item, item.考点 === focusName));
+}
+
+async function lookupNaokuQuestion(qid) {
+  const hint = $("#naoku-lookup-hint");
+  const box = $("#naoku-note");
+  const text = String(qid ?? "").trim();
+  box.textContent = "";
+  if (!/^\d+$/.test(text)) {
+    hint.textContent = "请输入数字题号（粉笔题号）。";
+    return;
+  }
+  $("#inp-naoku-qid").value = text;
+  hint.textContent = "查询中…";
+  const found = await naokuCall("for-question", { qid: text });
+  if (!found.ok) {
+    hint.textContent = found.error ?? "查询失败";
+    return;
+  }
+  if (!found.笔记) {
+    hint.textContent = `题号 ${text}：该题不在脑库覆盖范围内。`;
+    return;
+  }
+  hint.textContent = `题号 ${text}：${found.笔记.模块} / ${found.笔记.大类}，相关题 ${found.相关题?.length ?? 0} 道`;
+  const note = await naokuCall("note", { path: found.笔记.path });
+  if (!note.ok) {
+    hint.textContent = note.error ?? "笔记读取失败";
+    return;
+  }
+  box.innerHTML = renderMarkdown(note.content);
+  $("#naoku-block-lookup").scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
+async function selectNaokuPoint(name) {
+  const row = await resolveNaokuPoint(name);
+  if (!row) {
+    $("#naoku-points-count").textContent = `索引里没有「${name}」这个考点`;
+    return;
+  }
+  const known = naokuState.tree.find(
+    (item) => item.模块 === row.模块 && item.大类.some((c) => c.大类 === row.大类)
+  );
+  const 模块 = known ? row.模块 : $("#sel-naoku-module").value;
+  const 大类 = known ? row.大类 : $("#sel-naoku-cat").value;
+  $("#sel-naoku-module").value = 模块;
+  fillCatOptions();
+  $("#sel-naoku-cat").value = 大类;
+  await loadNaokuPoints({ focus: row.考点, focusRow: row });
+}
+
+async function importNaoku() {
+  const button = $("#btn-naoku-import");
+  const hint = $("#naoku-import-hint");
+  button.disabled = true;
+  naokuState.importing = true;
+  try {
+    hint.textContent = "导入中（稀疏克隆或更新副本，可能要几分钟）…";
+    const imported = await naokuCall("import");
+    if (!imported.ok) throw new Error(imported.error ?? "导入失败");
+    hint.textContent = "建索引中（扫描两万余篇笔记）…";
+    const indexed = await naokuCall("index");
+    if (!indexed.ok) throw new Error(indexed.error ?? "建索引失败");
+    hint.textContent = "完成";
+  } catch (error) {
+    const message = String(error?.message ?? error).replace(/^Error invoking remote method '[^']+':\s*(Error:\s*)?/, "");
+    hint.textContent = `失败：${message}`;
+  } finally {
+    naokuState.importing = false;
+    button.disabled = false;
+    await loadNaoku();
+  }
 }
 
 function wire() {
@@ -160,6 +508,32 @@ function wire() {
         renderStatus();
       });
     }
+  });
+
+  const naokuView = $("#view-naoku");
+  naokuView.addEventListener("click", (event) => {
+    const point = event.target.closest("[data-point]");
+    if (point) {
+      selectNaokuPoint(point.dataset.point);
+      return;
+    }
+    const qid = event.target.closest("[data-qid]");
+    if (qid) lookupNaokuQuestion(qid.dataset.qid);
+  });
+  $("#btn-naoku-import").addEventListener("click", importNaoku);
+  $("#btn-naoku-lookup").addEventListener("click", () => lookupNaokuQuestion($("#inp-naoku-qid").value));
+  $("#inp-naoku-qid").addEventListener("keydown", (event) => {
+    if (event.key === "Enter") lookupNaokuQuestion($("#inp-naoku-qid").value);
+  });
+  $("#sel-naoku-module").addEventListener("change", () => {
+    fillCatOptions();
+    loadNaokuPoints();
+  });
+  $("#sel-naoku-cat").addEventListener("change", () => loadNaokuPoints());
+  // 导入/建索引的进度走同步日志通道，这里只在导入期间把最新一条贴到按钮旁。
+  window.desk.onSyncProgress((payload) => {
+    if (!naokuState.importing || payload.type !== "log") return;
+    if (payload.message?.startsWith("脑库：")) $("#naoku-import-hint").textContent = payload.message.slice(3);
   });
 }
 

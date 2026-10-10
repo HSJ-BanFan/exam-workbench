@@ -18,6 +18,7 @@
       <nav class="nav">
         <button class="nav-item active" data-view="practice">刷题</button>
         <button class="nav-item" data-view="sync">数据同步</button>
+        <button class="nav-item" data-view="naoku">脑库</button>
         <button class="nav-item" data-view="settings">设置</button>
       </nav>
       <div class="rail-footer">
@@ -91,6 +92,47 @@
           <div class="card wide">
             <h2>同步日志</h2>
             <pre id="sync-log" class="log">（尚未同步）</pre>
+          </div>
+        </div>
+      </section>
+
+      <section class="view" id="view-naoku">
+        <div class="grid">
+          <div class="card wide">
+            <h2>脑库状态</h2>
+            <p class="muted">考公脑库是第三方标注库，只覆盖行测的「资料分析」「判断推理」；本页只读本机副本与索引，不下载正文到仓库。</p>
+            <div class="kv" id="naoku-kv"></div>
+            <div class="row" id="naoku-import-row" hidden>
+              <button class="btn primary" id="btn-naoku-import">导入脑库</button>
+              <span class="muted" id="naoku-import-hint"></span>
+            </div>
+            <ul class="warnings" id="naoku-warnings" hidden></ul>
+          </div>
+
+          <div class="card wide" id="naoku-block-wrong" hidden>
+            <h2>我的错题命中情况</h2>
+            <p class="muted" id="naoku-wrong-summary"></p>
+            <div class="hits" id="naoku-wrong-list"></div>
+          </div>
+
+          <div class="card wide" id="naoku-block-lookup" hidden>
+            <h2>按题号查标注</h2>
+            <div class="row">
+              <input id="inp-naoku-qid" type="text" inputmode="numeric" placeholder="粉笔题号，例如 10204443" />
+              <button class="btn" id="btn-naoku-lookup">查看标注</button>
+            </div>
+            <p class="muted" id="naoku-lookup-hint"></p>
+            <div class="note-body" id="naoku-note"></div>
+          </div>
+
+          <div class="card wide" id="naoku-block-points" hidden>
+            <h2>考点浏览</h2>
+            <div class="row">
+              <select id="sel-naoku-module"></select>
+              <select id="sel-naoku-cat"></select>
+              <span class="muted" id="naoku-points-count"></span>
+            </div>
+            <div class="point-list" id="naoku-points"></div>
           </div>
         </div>
       </section>
