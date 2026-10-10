@@ -15,8 +15,10 @@ your mistakes.*
 ## 功能
 
 - **Webview 刷题**：独立应用窗口内嵌题库，登录态持久化，接近原生的刷题体验
-- **只读数据同步**：9 个数据集（练习记录 / 题解与逐题作答 / 错题本快照 / 能力报告 /
+- **只读数据同步**：9 个粉笔数据集（练习记录 / 题解与逐题作答 / 错题本快照 / 能力报告 /
   笔记与收藏 / 模考记录 / 申论练习记录 / 申论作答与批改 / 可选题目元数据），增量缓存
+- **第三方标注库里层**：接入开源「考公脑库」（资料分析 / 判断推理），把本人做过的题按粉笔题号连到
+  考点、材料与相关题；只建索引，不分发其内容
 - **AI 友好输出**：带 frontmatter 的 Markdown + 机器可读 JSON；输出目录可配置（例如你的学习库）
 - **本机 HTTP 接口**：同步接口 + 只读题库接口（分类/试卷/题目/全站正确率），供 agent 调用
 - **无窗口模式**：`--sync-only` 静默同步并退出，适合接入定时复盘工作流
@@ -65,7 +67,8 @@ npm run pack     # 打包到 dist/（免安装目录）
 ├── 模考记录/            # 模考大赛完成记录
 ├── 申论练习记录/        # 申论历史与批改额度
 ├── 申论作答与批改/      # 申论题目/详情/批改报告（有数据时产出）
-└── 题目元数据/          # 可选：全站正确率/易错项（默认关闭）
+├── 题目元数据/          # 可选：全站正确率/易错项（默认关闭）
+└── 脑库索引/            # 第三方标注库的连接索引（真题/考点/材料，由 naoku 导入后生成）
 ```
 
 所有 Markdown 带 frontmatter（`type: generated / sample: false`），可以直接放进 Obsidian 库。
@@ -83,6 +86,28 @@ npm run pack     # 打包到 dist/（免安装目录）
 | 申论练习记录 | ✅ | 申论历史 + 批改额度（可能为空） | 申论进度与额度追踪 |
 | 申论作答与批改 | ✅ | 每场申论的题目/详情/批改报告（有数据时产出） | 申论逐题复盘 |
 | 题目元数据 | ⬜ 可选 | 全站正确率/易错项 | 难度校准（普遍难 vs 个别弱） |
+| 考公脑库索引 | ✅ | 第三方标注库的索引：题号 → 考点/材料/相关题 + 母题摘要（不含题面原文） | 考点级归因、同类题推荐 |
+
+## 考公脑库（第三方标注库）
+
+[考公脑库](https://github.com/ERRRC/kaogongzhentizhengliu) 是一个 Obsidian vault，把 2016–2026 年行测真题
+按考点重新组织，只覆盖「资料分析」和「判断推理」两个模块。本应用把它当作**标注层**：你继续用粉笔的
+题面和本人练习数据，脑库只补上「这道题属于哪个考点、同考点的其他题、材料结构、母题抽象」。
+
+导入（不需要登录粉笔；默认副本放在数据目录下的 `考公脑库`）：
+
+```powershell
+# 无窗口导入 + 重建索引；也可用 POST /api/naoku/import 与 /api/naoku/index
+npx electron . --naoku-import
+```
+
+导入用稀疏克隆（`--depth 1 --filter=blob:none --sparse`），**默认排除 `90-图片`**（21,829 张第三方
+配图，约 207MB）。索引写在 `脑库索引/`，只含连接关系与考点母题摘要（截断到 300 字符），不含题面原文；
+题面仍用 `/api/tiku/questions` 按题号取。可在「设置」里改 `naokuDir` 指向已有副本。
+
+许可边界：脑库自有部分（考点体系与逐题标注）是 **CC BY-NC 4.0（非商业）**，题面/材料/图片的著作权归
+原出题机构与题库平台。本项目不打包、不再分发任何第三方内容，只在你本机克隆并生成索引，请勿把数据目录
+（含索引与本人作答）公开分享。细节见 [`docs/数据来源与许可.md`](docs/数据来源与许可.md)。
 
 ## 本机接口（默认 `http://127.0.0.1:8791`）
 
@@ -95,6 +120,10 @@ npm run pack     # 打包到 dist/（免安装目录）
 | `GET /api/tiku/paper?prefix=&paperId=` / `paper-sheet?...` | 试卷详情 / 结构（含 questionIds） |
 | `GET /api/tiku/questions?prefix=&ids=` | 按题目 ID 取题干/选项/正确答案（ids ≤ 20） |
 | `GET /api/tiku/question-meta?prefix=&ids=` | 全站正确率 / 易错项（ids ≤ 50） |
+| `GET /api/naoku/status` `POST /api/naoku/import` `POST /api/naoku/index` | 脑库副本与索引状态 / 导入 / 重建索引 |
+| `GET /api/naoku/search?type=&q=&模块=&大类=&地区=&年份=&考点=&limit=` | 检索索引（limit ≤ 200） |
+| `GET /api/naoku/for-question?qid=` | 按题号取考点/材料/相关题 |
+| `GET /api/naoku/note?path=` `GET /api/naoku/points?模块=&大类=` | 读脑库笔记正文 / 考点列表 |
 
 「设置」中可修改端口与访问令牌（设置后请求需带 `X-Sync-Token` 头）。
 完整接口参考（含逆向说明与边界）：[`docs/api.md`](docs/api.md)。
@@ -119,8 +148,10 @@ npm start                       # 开发运行
 npm run pack                    # 打包
 node scripts/dev-sync-test.mjs  # 不用 UI 直接跑同步引擎（SESSION_PATH 指向会话文件）
 node scripts/api-test.mjs       # 启动应用并自动化测试 HTTP 接口
+node scripts/naoku-test.mjs     # 脑库索引自测（合成 fixture；带 NAOKU_VAULT=<路径> 时对真实副本再跑一遍）
 node scripts/probe.mjs "/api/xingce/errors/keypoint-tree?timeRange=0&order=desc"
 npx electron . --self-test      # 全链路自测：导入会话→同步→截图→退出
+npx electron . --naoku-import   # 无窗口导入脑库副本并重建索引
 ```
 
 ## 隐私与合规（重要）
@@ -128,6 +159,8 @@ npx electron . --self-test      # 全链路自测：导入会话→同步→截�
 - **凭据本地**：`sess/persistent` 等 Cookie 只存在于本机应用会话目录；仓库与导出中不含凭据
 - **个人数据**：导出包含你本人的作答与错题（手机号等已脱敏）；请勿公开分享你的输出目录
 - **平台内容**：题目与解析的版权归平台所有；本项目不内置、不打包任何题库内容，只在你本人使用时读取
+- **第三方标注库**：脑库标注部分为 CC BY-NC 4.0（非商业，需署名）；本项目不转发其内容，见
+  [`docs/数据来源与许可.md`](docs/数据来源与许可.md)
 - **使用方式**：建议低频读取并遵守平台条款；接口为逆向所得，可能随时变化，不保证长期可用
 
 ## 免责声明

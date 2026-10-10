@@ -76,9 +76,105 @@
 | `GET /api/tiku/paper?prefix=&paperId=` / `paper-sheet?...` | 试卷详情 / 结构 |
 | `GET /api/tiku/questions?prefix=&ids=` | 题干（ids ≤ 20） |
 | `GET /api/tiku/question-meta?prefix=&ids=` | 全站正确率/易错项（ids ≤ 50） |
+| `GET /api/naoku/status` | 脑库副本与索引状态（本地，不需要登录态） |
+| `POST /api/naoku/import` | 稀疏克隆或更新脑库副本（跳过 `90-图片`） |
+| `POST /api/naoku/index` | 扫描脑库副本，重建 `脑库索引/` |
+| `GET /api/naoku/search?type=&q=&模块=&大类=&地区=&年份=&考点=&limit=` | 在索引字段上检索（limit ≤ 200） |
+| `GET /api/naoku/note?path=` | 读脑库笔记正文（路径限制在 vault 内） |
+| `GET /api/naoku/for-question?qid=` | 按粉笔题号取「真题 → 考点/材料/相关题」 |
+| `GET /api/naoku/points?模块=&大类=&limit=` | 考点列表（含母题摘要），供考点级复习 |
 
-## 7. 使用边界
+## 7. 脑库索引接口（`/api/naoku/*`）
+
+数据来源是第三方 Obsidian vault「[考公脑库](https://github.com/ERRRC/kaogongzhentizhengliu)」，只覆盖
+行测的「资料分析」「判断推理」。本组接口只在**本地副本与索引**上工作，不联网取题面，也不复制脑库正文；
+许可与出处见 [`数据来源与许可.md`](数据来源与许可.md)。
+
+前置：先 `POST /api/naoku/import`（稀疏克隆，跳过 206MB 的 `90-图片`），再 `POST /api/naoku/index`。
+命令行等价入口是 `npx electron . --naoku-import`（无窗口导入 + 重建索引）。
+
+### `GET /api/naoku/status`
+
+```json
+{
+  "ok": true,
+  "vaultDir": "D:\\Documents\\fenbi-sync\\考公脑库",
+  "repo": "https://github.com/ERRRC/kaogongzhentizhengliu.git",
+  "imported": true,
+  "indexed": true,
+  "indexDir": "D:\\Documents\\fenbi-sync\\脑库索引",
+  "counts": { "真题": 11282, "考点": 10375, "材料": 717, "笔记总数": 22380, "考点链接未命中": 1, "材料链接未命中": 0 },
+  "vaultCommit": "84ab93d4b64b61d897bece8a1c0a5bab06b4feb2",
+  "generatedAtText": "2026-10-10T02:31:07.412Z",
+  "warnings": []
+}
+```
+
+### `POST /api/naoku/import` / `POST /api/naoku/index`
+
+`import` 幂等：目录无 `.git` 时按 `--depth 1 --filter=blob:none --sparse` 克隆，已存在时
+`fetch --depth 1` + 重放 sparse 规则 + `reset --hard FETCH_HEAD`（不递归删除任何目录）。
+
+```json
+{ "ok": true, "dir": "D:\\Documents\\fenbi-sync\\考公脑库", "repo": "https://github.com/ERRRC/kaogongzhentizhengliu.git", "commit": "84ab93d4b6…", "cloned": false }
+```
+
+`index` 未导入时返回 `409` 与 `脑库未导入（…），先运行 POST /api/naoku/import`。成功返回：
+
+```json
+{ "ok": true, "counts": { "真题": 11282, "考点": 10375, "材料": 717, "笔记总数": 22380, "考点链接未命中": 1, "材料链接未命中": 0 },
+  "模块列表": ["判断推理", "资料分析"], "warnings": ["考点题数与真题反查不一致 1 处，例如：…"], "vault": { "dir": "…", "commit": "84ab93d4…" } }
+```
+
+### `GET /api/naoku/search`
+
+`type` 取 `真题`（默认）、`考点`、`材料`，其他值返回 `400`。`q` 是跨字段关键字，其余参数按字段包含匹配。
+`limit` 默认 50，**上限 200**，非法值回落到默认。
+
+```powershell
+Invoke-RestMethod "http://127.0.0.1:8791/api/naoku/search?type=真题&地区=广东&年份=2024&limit=5"
+```
+
+```json
+{ "ok": true, "type": "真题", "total": 56, "limit": 5,
+  "items": [{ "qid": "10204443", "模块": "资料分析", "大类": "增长", "考点": "增长 / 年均增长量",
+    "考点路径": "20-考点/资料分析/增长/年均增长量", "地区": "广东", "年份": "2024",
+    "相关题": ["5514931", "5102148", "12881983"], "材料": "4463712",
+    "path": "10-真题/资料分析/增长/10204443 年均增长量.md" }] }
+```
+
+### `GET /api/naoku/for-question?qid=`
+
+`qid` 用粉笔题号，和 `GET /api/tiku/questions?ids=` 是同一套编号；`考点`/`材料`/`相关题` 都带 `path`，可直接接 `note`。
+
+```json
+{ "ok": true, "qid": "10204443",
+  "笔记": { "qid": "10204443", "考点": "增长 / 年均增长量", "材料": "4463712", "path": "10-真题/…/10204443 年均增长量.md" },
+  "考点": { "考点": "年均增长量", "题数": 3, "母题": "当题干出现…", "真题": ["5102148", "5514931", "10204443"], "path": "20-考点/资料分析/增长/年均增长量.md" },
+  "材料": { "mid": "4463712", "小题数": 5, "真题": ["10204443", "…"], "path": "15-材料/资料分析/4463712 …md" },
+  "相关题": [{ "qid": "5514931", "path": "10-真题/资料分析/增长/5514931 年均增长量.md" }] }
+```
+
+未收录的 qid 返回 `{ "ok": true, "qid": "…", "笔记": null, "考点": null, "材料": null, "相关题": [] }`；
+缺 `qid` 返回 `400`。
+
+### `GET /api/naoku/note?path=`
+
+`path` 必须是 vault 内的相对路径（索引里的 `path` 直接可用）。越界、绝对路径、空值一律 `400`，服务端在
+`realpath` 之后复核文件确实落在 vault 内，符号链接同样挡掉。
+
+```json
+{ "ok": true, "path": "20-考点/资料分析/增长/年均增长量.md", "content": "---\n类型: \"考点\"\n…" }
+```
+
+### `GET /api/naoku/points?模块=&大类=&limit=`
+
+等价于 `search?type=考点`，返回考点与其母题摘要，`limit` 同样上限 200。
+
+## 8. 使用边界
 
 - 仅用于**本人账号**的读取与学习分析；不要用于批量抓取题库或再分发平台内容。
 - 应用侧只调用读接口；提交答案/删除错题/写作等写操作一律未实现。
 - 平台可能调整接口或收紧权限（例如未练习内容不可取材料/答案），本项目不保证长期可用。
+- 脑库是**第三方**内容：本项目只做本地副本与索引，不分发其笔记、题面、材料与图片；上游标注部分为
+  CC BY-NC 4.0（非商业），引用需署名。详见 [`数据来源与许可.md`](数据来源与许可.md)。
