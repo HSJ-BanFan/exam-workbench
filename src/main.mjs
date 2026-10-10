@@ -37,6 +37,16 @@ function defaultBootstrapPath() {
   }
 }
 
+// 脑库副本默认放应用数据目录，不放 dataDir：dataDir 通常位于 Obsidian 库内，
+// 而脑库是 2 万余篇外来笔记，落进去会污染库图谱，并让库校验器逐篇报 type 无效。
+function defaultNaokuDir() {
+  try {
+    return path.join(app.getPath("userData"), "考公脑库");
+  } catch {
+    return path.join(ROOT, "考公脑库");
+  }
+}
+
 const isSelfTest = process.argv.includes("--self-test");
 const isSyncOnly = process.argv.includes("--sync-only");
 const isNaokuImport = process.argv.includes("--naoku-import");
@@ -57,7 +67,7 @@ function loadConfig() {
     datasets: defaultSelection(),
     autoSyncOnLaunch: true,
     bootstrapSessionPath: defaultBootstrapPath(),
-    naokuDir: path.join(dataDir, "考公脑库"),
+    naokuDir: defaultNaokuDir(),
     naokuRepo: DEFAULT_REPO,
   };
   try {
@@ -96,7 +106,7 @@ let apiServer = null;
 // ---------------------------------------------------------------- naoku
 
 function resolveNaokuDir() {
-  return config.naokuDir?.trim() ? path.resolve(config.naokuDir) : path.join(config.dataDir, "考公脑库");
+  return config.naokuDir?.trim() ? path.resolve(config.naokuDir) : defaultNaokuDir();
 }
 
 function naokuIndexDir() {
