@@ -66,9 +66,7 @@ function renderStatus() {
 
   const sdPill = $("#sd-pill");
   const sdOn = Boolean(st.hasSaduckSession);
-  sdPill.classList.toggle("ok", sdOn);
-  sdPill.classList.toggle("bad", st.hasSaduckSession === false);
-  sdPill.lastChild.textContent = sdOn ? "SaDuck 已登录" : "SaDuck 未登录";
+  renderSaduckPill(sdOn);
 
   $("#rail-version").textContent = cfg.version ? `v${cfg.version}` : "";
   $("#inp-dir").value = cfg.dataDir ?? "";
@@ -92,22 +90,59 @@ function switchView(name) {
   const previous = document.querySelector(".view.active")?.id;
   document.querySelectorAll(".nav-item").forEach((b) => b.classList.toggle("active", b.dataset.view === name));
   document.querySelectorAll(".view").forEach((v) => v.classList.toggle("active", v.id === `view-${name}`));
-  if (name === "saduck") refreshSaduck();
+  if (name === "saduck") checkSaduck();
   if (name === "naoku" && previous !== "view-naoku") loadNaoku();
 }
 
 // ---------------------------------------------------------------- saduck
 
+let saduckCheckInFlight = null;
+let saduckRecheckTimer = null;
+
+function renderSaduckPill(loggedIn) {
+  const pill = $("#sd-pill");
+  pill.classList.toggle("ok", loggedIn);
+  pill.classList.toggle("bad", !loggedIn);
+  pill.lastChild.textContent = loggedIn ? "SaDuck 已登录" : "SaDuck 未登录";
+}
+
+// 冷启动或重载时，第一次检查可能落在「还没到 saduck.top」的中间态，读到未登录。
+// 之后没人复查，说明文字就会一直和页面、底部胶囊互相打脸。
+function checkSaduck() {
+  if (saduckCheckInFlight) return saduckCheckInFlight;
+  saduckCheckInFlight = refreshSaduck().finally(() => {
+    saduckCheckInFlight = null;
+  });
+  return saduckCheckInFlight;
+}
+
+function scheduleSaduckRecheck() {
+  if (saduckRecheckTimer) return;
+  saduckRecheckTimer = setInterval(() => {
+    if (document.querySelector("#view-saduck").classList.contains("active")) checkSaduck();
+  }, 4000);
+}
+
+function stopSaduckRecheck() {
+  if (!saduckRecheckTimer) return;
+  clearInterval(saduckRecheckTimer);
+  saduckRecheckTimer = null;
+}
+
 async function refreshSaduck() {
   const sd = await window.desk.saduckStatus();
   state.saduck = sd;
   const note = $("#sd-note");
-  if (!sd.loggedIn) {
+  if (sd.loggedIn) {
+    const acc = sd.account ?? {};
+    note.textContent = `已登录 ${acc.emailMasked ?? ""} · vipType=${acc.vipType ?? "?"} · 到期 ${acc.vipEndTime ?? "?"}`;
+    stopSaduckRecheck();
+  } else {
     note.textContent = "未登录：在下方打开 saduck.top 登录后即可同步（登录态保存在本机应用目录）。";
-    return sd;
+    scheduleSaduckRecheck();
   }
-  const acc = sd.account ?? {};
-  note.textContent = `已登录 ${acc.emailMasked ?? ""} · vipType=${acc.vipType ?? "?"} · 到期 ${acc.vipEndTime ?? "?"}`;
+  if (state.status) state.status.hasSaduckSession = sd.loggedIn;
+  renderSaduckPill(sd.loggedIn);
   return sd;
 }
 
@@ -480,6 +515,9 @@ function wire() {
   });
 
   const saduckView = $("#saduck");
+  for (const eventName of ["dom-ready", "did-finish-load", "did-navigate", "did-navigate-in-page"]) {
+    saduckView.addEventListener(eventName, () => checkSaduck());
+  }
   $("#btn-sd-home").addEventListener("click", () => {
     saduckView.src = "https://saduck.top/";
   });
@@ -494,7 +532,7 @@ function wire() {
     appendLog(result?.ok ? `SaDuck 同步完成：${result.outDir}` : `SaDuck 同步结束：${result?.error ?? "未知错误"}`);
     sdSyncBtn.disabled = false;
     sdSyncBtn.textContent = "同步我的数据";
-    await refreshSaduck();
+    await checkSaduck();
   });
 
   const syncBtn = $("#btn-sync");
