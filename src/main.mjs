@@ -148,11 +148,18 @@ const NAOKU_ENDPOINTS = [
   "status",
   "import",
   "index",
+  "tree",
+  "wrong-hits",
   "search?type=&q=&模块=&大类=&地区=&年份=&考点=&limit=",
   "note?path=",
   "for-question?qid=",
-  "points?模块=&大类=&limit=",
+  "points?模块=&大类=&sort=&limit=",
 ];
+
+// 与 src/naoku.mjs 的 SEARCH_DEFAULT_LIMIT / SEARCH_MAX_LIMIT 对齐：调用方要按题数排序时，
+// 必须先按取值上限拿回候选集，排序后再截断到用户要的条数。
+const NAOKU_LIMIT_DEFAULT = 50;
+const NAOKU_LIMIT_MAX = 200;
 
 async function handleNaoku({ pathname, query }) {
   const vaultDir = resolveNaokuDir();
@@ -218,15 +225,76 @@ async function handleNaoku({ pathname, query }) {
           limit: query.get("limit") ?? undefined,
         })
       );
-    case "points":
-      return withIndex((index) =>
-        searchIndex(index, {
+    case "tree":
+      return withIndex((index) => {
+        const 模块 = new Map();
+        const cell = (模块名, 大类名) => {
+          if (!模块.has(模块名)) 模块.set(模块名, new Map());
+          const 大类 = 模块.get(模块名);
+          if (!大类.has(大类名)) 大类.set(大类名, { 大类: 大类名, 考点数: 0, 真题数: 0 });
+          return 大类.get(大类名);
+        };
+        for (const row of index.考点 ?? []) cell(row.模块, row.大类).考点数++;
+        for (const row of index.真题 ?? []) cell(row.模块, row.大类).真题数++;
+        return {
+          模块: [...模块.entries()]
+            .map(([名称, 大类]) => ({
+              模块: 名称,
+              大类: [...大类.values()].sort((a, b) => a.大类.localeCompare(b.大类, "zh")),
+            }))
+            .sort((a, b) => a.模块.localeCompare(b.模块, "zh")),
+          counts: {
+            真题: (index.真题 ?? []).length,
+            考点: (index.考点 ?? []).length,
+            材料: (index.材料 ?? []).length,
+          },
+        };
+      });
+    case "wrong-hits": {
+      const wrongFile = path.join(config.dataDir, "错题本", "wrong.json");
+      const empty = (说明) => ({ ok: true, total: 0, hitCount: 0, hits: [], missCount: 0, 覆盖模块: [], 说明 });
+      let wrongIds;
+      try {
+        const saved = JSON.parse(fs.readFileSync(wrongFile, "utf8"));
+        wrongIds = Array.isArray(saved?.wrongIds) ? saved.wrongIds : [];
+      } catch {
+        return empty(`没有读到 ${wrongFile}，先在「数据同步」里勾选「错题本」同步一次`);
+      }
+      return withIndex((index) => {
+        const byQid = new Map((index.真题 ?? []).map((row) => [String(row.qid), row]));
+        const ids = [...new Set(wrongIds.map((id) => String(id).trim()).filter(Boolean))];
+        const hits = ids
+          .map((qid) => byQid.get(qid))
+          .filter(Boolean)
+          .map((row) => ({ qid: row.qid, 模块: row.模块, 大类: row.大类, 考点: row.考点, path: row.path }));
+        hits.sort((a, b) => Number(a.qid) - Number(b.qid));
+        return {
+          total: ids.length,
+          hitCount: hits.length,
+          hits,
+          missCount: ids.length - hits.length,
+          覆盖模块: [...new Set((index.真题 ?? []).map((row) => row.模块))].sort(),
+        };
+      });
+    }
+    case "points": {
+      const sort = query.get("sort") ?? "";
+      const limit = query.get("limit") ?? undefined;
+      return withIndex((index) => {
+        const result = searchIndex(index, {
           type: "考点",
           模块: query.get("模块") ?? undefined,
           大类: query.get("大类") ?? undefined,
-          limit: query.get("limit") ?? undefined,
-        })
-      );
+          limit: sort === "题数" ? NAOKU_LIMIT_MAX : limit,
+        });
+        if (sort !== "题数") return result;
+        const take = Math.min(Math.max(Number(limit) || NAOKU_LIMIT_DEFAULT, 1), NAOKU_LIMIT_MAX);
+        const items = [...result.items]
+          .sort((a, b) => (Number(b.题数) || 0) - (Number(a.题数) || 0))
+          .slice(0, take);
+        return { ...result, limit: take, items };
+      });
+    }
     case "note": {
       if (!fs.existsSync(vaultDir)) {
         return { httpStatus: 409, body: { ok: false, error: `脑库未导入（${vaultDir}），先运行 POST /api/naoku/import` } };
