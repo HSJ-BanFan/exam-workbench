@@ -97,3 +97,68 @@
 - 凭据（sess/persistent/userid）只存在于本机 Electron 分区与引导用 session.json，
   不写入输出目录；输出目录中手机号等字段已脱敏（151****5169）。
 - HTTP 接口仅 127.0.0.1；支持设置 X-Sync-Token。
+
+## 附录：第四次迭代 — SaDuck 接入（2026-10-10）
+
+需求：在应用内使用 SaDuck（saduck.top），并通过本机 HTTP 接口把 SaDuck 能力暴露给本地 agent。
+
+实现（上游：`cases/case-2026-saduck01`）：
+
+- 新增 `src/saduck.mjs`：8 个数据集（7 个默认；词语辨析练习组默认关闭）、经 webview 页面上下文
+  调用官方接口（token 不出页面）、导出为与 saduck-cli 相同结构的 md + json + manifest + 状态。
+- `src/main.mjs`：跟踪 `persist:saduck` webview；`doSaduckSync`；会话引导
+  （`%APPDATA%\备考工作台\saduck-session.json`，格式同 saduck-cli `session.json`）；
+  IPC `saduck:status` / `saduck:sync`；HTTP `/api/saduck/*`；自检扩展为「粉笔 + SaDuck」双链路。
+- `ui/`：新增「SaDuck」页（webview + 首页/刷新/浏览器打开/同步我的数据）、侧栏 SaDuck 登录灯、
+  设置项「SaDuck 数据输出目录」、接口卡新增 SaDuck 段。
+- `scripts/api-test.mjs`：新增 SaDuck 断言（status/datasets/data/sync；未登录时自动降级）。
+
+实测证据（2026-10-10）：
+
+1. 开发版 `npx electron . --self-test`（scratch userData + 双源会话引导）：PASS；
+   粉笔 history 3 场 + ability ✓；SaDuck 7 数据集全部 ok。
+2. `node scripts/api-test.mjs`：`ok: true`；`saduckStatus{loggedIn:true}`、`saduckDatasets=8`、
+   `saduckData ok`、`saduckSync 200`（time,plan）。
+3. 真实配置实测：`/api/saduck/status` → `dir=D:\05_Life\...\60-资料\SaDuck同步`；
+   `POST /api/saduck/sync` → 7 数据集落盘；考公库 `node tools/vault.mjs check` → 3923 文件 0 错误 0 警告。
+4. 打包版 `dist/exam-workbench-win32-x64/exam-workbench.exe --self-test` → PASS（exit 0），
+   截图 `window.png` + `window-saduck.png`；产物与本记录同目录 `.selftest/saduck-e2e/result-packaged3/`。
+
+边界与限制：
+
+- SaDuck 全程只读；不含写操作与站点正文内容；token 只存应用会话目录与引导文件，不进输出目录。
+- SaDuck 同步需要应用窗口（webview）在线；`--sync-only` 目前仍只覆盖粉笔（SaDuck 待接线）。
+- 会员状态变化（如到期）会以接口 `code 102` 反映到同步状态表，不会中断其他数据集。
+
+## 附录：第五次迭代 — Agent Surface（发现接口 + MCP）（2026-10-10）
+
+需求：agent 不应在应用外手写规则才能使用工作台；应有一个接口包装能力与技能，调用它即可理解工作台。
+
+实现：
+
+- `src/agent-surface.mjs`（新增，单一事实源）：25 条能力（HTTP 路由 / 参数 JSON Schema / 前置条件 / 只读标记 /
+  示例说明）+ 5 个技能索引；`/api/agent`、`/api/agent/skills/<id>` 与 `mcp/server.mjs` 都从它生成。
+- `skills/`（新增 5 篇）：sync-and-status / tiku-lookup / naoku-attribution / saduck-data / outputs-and-privacy。
+- `mcp/server.mjs`（新增，stdio、零依赖）：JSON-RPC over stdio；tools 25、prompts 5、
+  resources（工作台状态 + 两个 manifest + 技能原文）。
+- `src/server.mjs`、`src/main.mjs`：`/api/agent` 路由与 handler；state 只含布尔与时间，不泄露邮箱/token。
+- `scripts/api-test.mjs`：新增 `/api/agent` 契约断言、技能可取、能力抽样可达、MCP 冒烟
+  （initialize / tools/list / prompts/list / tools.call app_status）。
+- 项目级注册：考公库 `.codex/config.toml`（Codex）与 `.mcp.json`（Claude Code）；工作台仓库不再保留注册，避免跨项目出现。
+- 版本 0.3.0。
+
+实测证据（2026-10-10，日志在 `.selftest/saduck-e2e/`）：
+
+1. 开发版 api-test：`ok:true`；`agent{capabilities:25, skills:5}`；技能 URL 200（text/markdown）；
+   5 个能力探针全部 200；`mcp{server:"exam-workbench", tools:25, prompts:5, statusOk:true}`。
+2. 打包版 api-test（`dist\exam-workbench-win32-x64\exam-workbench.exe`）：`ok:true`，同上一套断言。
+3. 精确配置验证：真实应用运行时，按考公项目级配置同款命令（绝对 node 路径 + `mcp/server.mjs` + 默认端口，
+   cwd=考公库）握手成功并可调用 `app_status`（server v0.3.0）。
+
+偏差说明：MCP 冒烟放在 api-test（普通 node 进程，便于驱动 stdio），未放进 Electron selftest。
+
+边界与限制：
+
+- `/api/agent` 受与全站一致的 `X-Sync-Token` 保护；state 不含邮箱与 token。
+- 应用未运行时 MCP 工具返回离线提示；不自动拉起应用，避免隐式副作用。
+- surface schema 版本为 1；破坏性变更需要升版本并在 README 标注。

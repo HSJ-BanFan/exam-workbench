@@ -10,6 +10,8 @@ contextBridge.exposeInMainWorld("desk", {
   openPath: (p) => ipcRenderer.invoke("open:path", p),
   openExternal: (url) => ipcRenderer.invoke("open:external", url),
   tikuHome: () => ipcRenderer.invoke("tiku:home"),
+  saduckStatus: () => ipcRenderer.invoke("saduck:status"),
+  runSaduckSync: (opts) => ipcRenderer.invoke("saduck:sync", opts),
   naoku: (pathname, params) => ipcRenderer.invoke("naoku:query", { pathname, params }),
   onSyncProgress: (cb) => {
     const listener = (_event, payload) => cb(payload);

@@ -1,7 +1,7 @@
 {
   "name": "exam-workbench",
   "productName": "备考工作台",
-  "version": "0.1.0",
+  "version": "0.3.0",
   "description": "基于 Webview 的本地备考工作台：刷题 + 只读同步个人练习数据，输出给本地 AI agent 分析（非官方项目）",
   "license": "MIT",
   "keywords": [

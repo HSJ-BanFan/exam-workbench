@@ -17,6 +17,7 @@
       </div>
       <nav class="nav">
         <button class="nav-item active" data-view="practice">刷题</button>
+        <button class="nav-item" data-view="saduck">SaDuck</button>
         <button class="nav-item" data-view="sync">数据同步</button>
         <button class="nav-item" data-view="naoku">脑库</button>
         <button class="nav-item" data-view="settings">设置</button>
@@ -24,6 +25,7 @@
       <div class="rail-footer">
         <div class="pill" id="login-pill"><span class="dot"></span>登录状态未知</div>
         <div class="pill" id="api-pill"><span class="dot"></span>接口未就绪</div>
+        <div class="pill" id="sd-pill"><span class="dot"></span>SaDuck 未登录</div>
         <div class="hint" id="rail-version"></div>
       </div>
     </aside>
@@ -37,6 +39,17 @@
           <span class="toolbar-note">在此登录后即可同步；登录态保存在本机应用目录。</span>
         </div>
         <webview id="fenbi" src="https://www.fenbi.com/spa/tiku/guide/redirect" partition="persist:fenbi" allowpopups></webview>
+      </section>
+
+      <section class="view" id="view-saduck">
+        <div class="toolbar">
+          <button class="btn" id="btn-sd-home">SaDuck 首页</button>
+          <button class="btn" id="btn-sd-reload">刷新</button>
+          <button class="btn ghost" id="btn-sd-browser">在浏览器打开</button>
+          <button class="btn primary" id="btn-sd-sync">同步我的数据</button>
+          <span class="toolbar-note" id="sd-note">在此登录后即可同步；登录态保存在本机应用目录。</span>
+        </div>
+        <webview id="saduck" src="https://saduck.top/" partition="persist:saduck" allowpopups></webview>
       </section>
 
       <section class="view" id="view-sync">
@@ -62,6 +75,7 @@
             <h2>本机同步接口（给 Codex / Claude）</h2>
             <p class="muted">应用在 127.0.0.1 上暴露只读接口；数据同时写入输出目录，任选其一使用。</p>
             <ul class="api-list">
+              <li><code>GET /api/agent</code><span>能力清单 + 技能索引（agent 发现入口）</span></li>
               <li><code>GET /api/status</code><span>同步状态、最近结果</span></li>
               <li><code>GET /api/datasets</code><span>数据集与勾选状态</span></li>
               <li><code>POST /api/sync</code><span>触发一次同步（等它跑完返回摘要）</span></li>
@@ -80,6 +94,17 @@
             </ul>
             <div class="row">
               <button class="btn ghost" id="btn-copy-tiku">复制题库查询示例</button>
+            </div>
+            <p class="muted" style="margin-top: 12px">SaDuck 接口（只读，查本人 SaDuck 数据）：</p>
+            <ul class="api-list">
+              <li><code>GET /api/saduck/status</code><span>登录与会员状态、最近同步</span></li>
+              <li><code>GET /api/saduck/datasets</code><span>数据集目录</span></li>
+              <li><code>GET /api/saduck/data?dataset=</code><span>实时读取单个数据集（JSON）</span></li>
+              <li><code>POST /api/saduck/sync?datasets=</code><span>触发 SaDuck 同步</span></li>
+              <li><code>GET /api/saduck/manifest</code><span>SaDuck 输出目录清单</span></li>
+            </ul>
+            <div class="row">
+              <button class="btn ghost" id="btn-copy-saduck">复制 SaDuck 查询示例</button>
             </div>
           </div>
 
@@ -146,6 +171,12 @@
                 <div class="row">
                   <input id="inp-dir" type="text" class="mono" />
                   <button class="btn ghost" id="btn-choose">选择…</button>
+                </div>
+              </label>
+              <label>SaDuck 数据输出目录
+                <div class="row">
+                  <input id="inp-sd-dir" type="text" class="mono" />
+                  <button class="btn ghost" id="btn-sd-choose">选择…</button>
                 </div>
               </label>
               <label>本机接口端口（重启应用后生效）

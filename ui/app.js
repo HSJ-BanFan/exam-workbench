@@ -4,6 +4,7 @@ const state = {
   config: null,
   datasets: [],
   status: null,
+  saduck: null,
   logLines: [],
 };
 
@@ -63,8 +64,15 @@ function renderStatus() {
   apiPill.classList.toggle("ok", apiUp);
   apiPill.lastChild.textContent = apiUp ? "本机接口已配置" : "接口未就绪";
 
+  const sdPill = $("#sd-pill");
+  const sdOn = Boolean(st.hasSaduckSession);
+  sdPill.classList.toggle("ok", sdOn);
+  sdPill.classList.toggle("bad", st.hasSaduckSession === false);
+  sdPill.lastChild.textContent = sdOn ? "SaDuck 已登录" : "SaDuck 未登录";
+
   $("#rail-version").textContent = cfg.version ? `v${cfg.version}` : "";
   $("#inp-dir").value = cfg.dataDir ?? "";
+  $("#inp-sd-dir").value = cfg.saduckDir ?? "";
   $("#inp-port").value = cfg.port ?? 8791;
   $("#inp-token").value = cfg.tokenSet ? "" : "";
   $("#inp-token").placeholder = cfg.tokenSet ? "已设置（留空保持不变）" : "未设置";
@@ -84,7 +92,23 @@ function switchView(name) {
   const previous = document.querySelector(".view.active")?.id;
   document.querySelectorAll(".nav-item").forEach((b) => b.classList.toggle("active", b.dataset.view === name));
   document.querySelectorAll(".view").forEach((v) => v.classList.toggle("active", v.id === `view-${name}`));
+  if (name === "saduck") refreshSaduck();
   if (name === "naoku" && previous !== "view-naoku") loadNaoku();
+}
+
+// ---------------------------------------------------------------- saduck
+
+async function refreshSaduck() {
+  const sd = await window.desk.saduckStatus();
+  state.saduck = sd;
+  const note = $("#sd-note");
+  if (!sd.loggedIn) {
+    note.textContent = "未登录：在下方打开 saduck.top 登录后即可同步（登录态保存在本机应用目录）。";
+    return sd;
+  }
+  const acc = sd.account ?? {};
+  note.textContent = `已登录 ${acc.emailMasked ?? ""} · vipType=${acc.vipType ?? "?"} · 到期 ${acc.vipEndTime ?? "?"}`;
+  return sd;
 }
 
 // ---------------------------------------------------------------- 脑库
@@ -447,6 +471,24 @@ function wire() {
     await window.desk.openExternal(await window.desk.tikuHome());
   });
 
+  const saduckView = $("#saduck");
+  $("#btn-sd-home").addEventListener("click", () => {
+    saduckView.src = "https://saduck.top/";
+  });
+  $("#btn-sd-reload").addEventListener("click", () => saduckView.reload());
+  $("#btn-sd-browser").addEventListener("click", () => window.desk.openExternal("https://saduck.top/"));
+  const sdSyncBtn = $("#btn-sd-sync");
+  sdSyncBtn.addEventListener("click", async () => {
+    sdSyncBtn.disabled = true;
+    sdSyncBtn.textContent = "同步中…";
+    appendLog("开始同步 SaDuck…");
+    const result = await window.desk.runSaduckSync({});
+    appendLog(result?.ok ? `SaDuck 同步完成：${result.outDir}` : `SaDuck 同步结束：${result?.error ?? "未知错误"}`);
+    sdSyncBtn.disabled = false;
+    sdSyncBtn.textContent = "同步我的数据";
+    await refreshSaduck();
+  });
+
   const syncBtn = $("#btn-sync");
   syncBtn.addEventListener("click", async () => {
     syncBtn.disabled = true;
@@ -472,15 +514,25 @@ function wire() {
       `Invoke-RestMethod "${state.config.apiBase}/api/tiku/papers?labelId=1&pageSize=5"`
     )
   );
+  $("#btn-copy-saduck").addEventListener("click", () =>
+    navigator.clipboard.writeText(
+      `Invoke-RestMethod "${state.config.apiBase}/api/saduck/data?dataset=time"`
+    )
+  );
 
   $("#btn-choose").addEventListener("click", async () => {
     const dir = await window.desk.chooseDir();
     if (dir) $("#inp-dir").value = dir;
   });
+  $("#btn-sd-choose").addEventListener("click", async () => {
+    const dir = await window.desk.chooseDir();
+    if (dir) $("#inp-sd-dir").value = dir;
+  });
 
   $("#btn-save").addEventListener("click", async () => {
     const patch = {
       dataDir: $("#inp-dir").value.trim(),
+      saduckDir: $("#inp-sd-dir").value.trim(),
       port: Number($("#inp-port").value),
       autoSyncOnLaunch: $("#chk-auto").checked,
     };

@@ -9,11 +9,25 @@ import { DATASETS, DATASET_IDS, defaultSelection, datasetById } from "./datasets
 import { createApiServer } from "./server.mjs";
 import { makeClient } from "./fenbi-api.mjs";
 import { buildIndex, writeIndex, searchIndex, forQuestion, readNote, importVault, DEFAULT_REPO } from "./naoku.mjs";
+import {
+  SADUCK_DATASETS,
+  SADUCK_DATASET_IDS,
+  SADUCK_ORIGIN,
+  SADUCK_PARTITION,
+  defaultSaduckSelection,
+  maskEmail,
+  readSaduckToken,
+  callSaduckApi,
+  runSaduckSync,
+  readSaduckManifest,
+  saduckDatasetById,
+} from "./saduck.mjs";
+import { buildAgentManifest, readAgentSkill } from "./agent-surface.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, "..");
 
-const APP_VERSION = "0.1.0";
+const APP_VERSION = "0.3.0";
 const PARTITION = "persist:fenbi";
 const TIKU_HOME = "https://www.fenbi.com/spa/tiku/guide/redirect";
 const CHROME_UA =
@@ -47,10 +61,36 @@ function defaultNaokuDir() {
   }
 }
 
+// SaDuck 输出目录：默认与「粉笔同步」同级的「SaDuck同步」；其他数据目录回落文档目录。
+function defaultSaduckDir(dataDir) {
+  try {
+    const base = path.basename(dataDir);
+    if (base === "粉笔同步") return path.join(path.dirname(dataDir), "SaDuck同步");
+    if (base === "fenbi-sync") return path.join(path.dirname(dataDir), "saduck-sync");
+    return path.join(app.getPath("documents"), "saduck-sync");
+  } catch {
+    return path.join(ROOT, "saduck-data");
+  }
+}
+
+// 可选：把含 token 的 saduck-cli session.json 放到应用数据目录，首次启动时导入一次。
+function defaultSaduckBootstrapPath() {
+  try {
+    return path.join(app.getPath("userData"), "saduck-session.json");
+  } catch {
+    return "";
+  }
+}
+
 const isSelfTest = process.argv.includes("--self-test");
 const isSyncOnly = process.argv.includes("--sync-only");
 const isNaokuImport = process.argv.includes("--naoku-import");
 const SELFTEST_DIR = process.env.SELFTEST_DIR ?? path.join(ROOT, ".selftest");
+
+// 供自动化测试与多实例运行：把 userData 指到独立目录（默认不动真实配置）。
+if (process.env.EXAM_WORKBENCH_USER_DATA) {
+  app.setPath("userData", path.resolve(process.env.EXAM_WORKBENCH_USER_DATA));
+}
 
 // ---------------------------------------------------------------- config
 
@@ -69,10 +109,20 @@ function loadConfig() {
     bootstrapSessionPath: defaultBootstrapPath(),
     naokuDir: defaultNaokuDir(),
     naokuRepo: DEFAULT_REPO,
+    saduckDir: defaultSaduckDir(dataDir),
+    saduckDatasets: defaultSaduckSelection(),
+    saduckBootstrapPath: defaultSaduckBootstrapPath(),
   };
   try {
     const saved = JSON.parse(fs.readFileSync(configPath(), "utf8"));
-    return { ...defaults, ...saved, datasets: sanitizeDatasets(saved.datasets, defaults.datasets) };
+    const merged = {
+      ...defaults,
+      ...saved,
+      datasets: sanitizeDatasets(saved.datasets, defaults.datasets),
+      saduckDatasets: sanitizeSaduckDatasets(saved.saduckDatasets, defaults.saduckDatasets),
+    };
+    if (!saved.saduckDir) merged.saduckDir = defaultSaduckDir(merged.dataDir);
+    return merged;
   } catch {
     return defaults;
   }
@@ -81,6 +131,12 @@ function loadConfig() {
 function sanitizeDatasets(list, fallback) {
   if (!Array.isArray(list)) return fallback;
   const clean = list.filter((id) => DATASET_IDS.includes(id));
+  return clean.length ? clean : [];
+}
+
+function sanitizeSaduckDatasets(list, fallback) {
+  if (!Array.isArray(list)) return fallback;
+  const clean = list.filter((id) => SADUCK_DATASET_IDS.includes(id));
   return clean.length ? clean : [];
 }
 
@@ -100,8 +156,16 @@ const syncState = {
   lastSyncAt: null,
 };
 
+const saduckState = {
+  running: false,
+  lastSummary: null,
+  lastError: null,
+  lastSyncAt: null,
+};
+
 let win = null;
 let apiServer = null;
+let saduckWeb = null;
 
 // ---------------------------------------------------------------- naoku
 
@@ -329,6 +393,87 @@ function fenbiSession() {
   return ses;
 }
 
+// ---------------------------------------------------------------- saduck
+
+function waitForSaduckWeb(timeoutMs = 15000) {
+  if (saduckWeb && !saduckWeb.isDestroyed()) return Promise.resolve(saduckWeb);
+  return new Promise((resolve) => {
+    const started = Date.now();
+    const timer = setInterval(() => {
+      if (saduckWeb && !saduckWeb.isDestroyed()) {
+        clearInterval(timer);
+        resolve(saduckWeb);
+      } else if (Date.now() - started > timeoutMs) {
+        clearInterval(timer);
+        resolve(null);
+      }
+    }, 300);
+  });
+}
+
+// 未登录时从 saduckBootstrapPath 导入一次 token（格式同 saduck-cli 的 session.json）。
+async function bootstrapSaduckToken(log = () => {}) {
+  const web = saduckWeb;
+  if (!web || web.isDestroyed()) return false;
+  if (await readSaduckToken(web)) return true;
+  const source = config.saduckBootstrapPath;
+  if (!source || !fs.existsSync(source)) return false;
+  try {
+    const saved = JSON.parse(fs.readFileSync(source, "utf8"));
+    const token = typeof saved === "string" ? saved : saved?.token;
+    if (typeof token !== "string" || token.length < 20) return false;
+    await web.executeJavaScript(`localStorage.setItem("token", ${JSON.stringify(token)})`, true);
+    web.reload();
+    const deadline = Date.now() + 8000;
+    while (Date.now() < deadline) {
+      if (await readSaduckToken(web)) {
+        log("已从本地会话文件导入 SaDuck 登录态（仅本机）");
+        return true;
+      }
+      await new Promise((r) => setTimeout(r, 400));
+    }
+    return false;
+  } catch (error) {
+    log(`SaDuck 会话导入失败：${error?.message ?? error}`);
+    return false;
+  }
+}
+
+async function saduckStatus() {
+  await bootstrapSaduckToken().catch(() => {});
+  const result = {
+    ok: true,
+    loggedIn: false,
+    account: null,
+    webReady: Boolean(saduckWeb && !saduckWeb.isDestroyed()),
+    dir: path.resolve(config.saduckDir),
+    bootstrapSessionPath: config.saduckBootstrapPath,
+    running: saduckState.running,
+    lastSyncAt: saduckState.lastSyncAt,
+    lastError: saduckState.lastError,
+    datasets: SADUCK_DATASETS.map((d) => ({ id: d.id, name: d.name, default: d.default })),
+  };
+  const web = saduckWeb;
+  if (!web || web.isDestroyed()) return result;
+  result.webReady = true;
+  const token = await readSaduckToken(web).catch(() => null);
+  if (!token) return result;
+  result.loggedIn = true;
+  const check = await callSaduckApi(web, "/user/verify").catch(() => null);
+  if (check && (check.code === 100 || check.code === 101)) {
+    result.loggedIn = false;
+    return result;
+  }
+  if (check?.result) {
+    result.account = {
+      emailMasked: maskEmail(check.result.email),
+      vipType: check.result.vipType ?? null,
+      vipEndTime: check.result.vipEndTime ?? null,
+    };
+  }
+  return result;
+}
+
 async function readCookieHeader(ses) {
   const cookies = await ses.cookies.get({ url: "https://tiku.fenbi.com/" });
   if (!cookies.length) return "";
@@ -424,6 +569,107 @@ async function doSync({ datasets, full = false, source = "app" } = {}) {
   }
 }
 
+// ---------------------------------------------------------------- saduck sync
+
+async function doSaduckSync({ datasets, source = "app" } = {}) {
+  if (saduckState.running) {
+    return { ok: false, error: "busy", message: "已有 SaDuck 同步在进行中" };
+  }
+  saduckState.running = true;
+  saduckState.lastError = null;
+  const log = (message) => {
+    console.log(`[saduck:${source}] ${message}`);
+    broadcast("sync:progress", { type: "log", message: `SaDuck：${message}`, at: Date.now() });
+  };
+  broadcast("sync:progress", { type: "start", at: Date.now() });
+  try {
+    const web = await waitForSaduckWeb(15000);
+    if (!web) throw new Error("SaDuck 页面未就绪：先打开「SaDuck」页");
+    await bootstrapSaduckToken(log);
+    const selected = Array.isArray(datasets) && datasets.length ? datasets : config.saduckDatasets;
+    const summary = await runSaduckSync({ web, outDir: path.resolve(config.saduckDir), datasets: selected, log });
+    saduckState.lastSummary = summary;
+    saduckState.lastSyncAt = Date.now();
+    broadcast("sync:progress", { type: "done", summary, at: Date.now() });
+    return summary;
+  } catch (error) {
+    saduckState.lastError = String(error?.message ?? error);
+    log(`同步失败：${saduckState.lastError}`);
+    broadcast("sync:progress", { type: "error", message: saduckState.lastError, at: Date.now() });
+    return { ok: false, error: saduckState.lastError };
+  } finally {
+    saduckState.running = false;
+  }
+}
+
+const SADUCK_ENDPOINTS = ["status", "datasets", "data?dataset=", "sync?datasets=", "manifest"];
+
+async function handleSaduck({ pathname, query, body }) {
+  const bad = (httpStatus, error) => ({ httpStatus, body: { ok: false, error } });
+  switch (pathname) {
+    case "status":
+      return { ok: true, ...(await saduckStatus()) };
+    case "datasets":
+      return {
+        ok: true,
+        datasets: SADUCK_DATASETS.map((d) => ({
+          id: d.id,
+          name: d.name,
+          default: d.default,
+          sensitivity: d.sensitivity,
+          description: d.description,
+          agentUse: d.agentUse,
+        })),
+      };
+    case "data": {
+      const id = query.get("dataset") ?? "";
+      const ds = saduckDatasetById(id);
+      if (!ds) {
+        return bad(400, `未知数据集：${id || "(空)"}（可用：${SADUCK_DATASET_IDS.join(", ")}）`);
+      }
+      const web = await waitForSaduckWeb(5000);
+      if (!web) return bad(409, "SaDuck 页面未就绪：先打开应用窗口");
+      await bootstrapSaduckToken();
+      const j = await callSaduckApi(web, ds.path, ds.body);
+      if (j.code === 100 || j.code === 101) return bad(409, "SaDuck 未登录：先在应用「SaDuck」页登录");
+      if (j.code === 102) return bad(409, `${j.message || "会员功能受限"}（code 102）`);
+      if (j.code !== 0) return bad(502, `${j.code} ${j.message ?? ""}`);
+      return { ok: true, dataset: ds.id, name: ds.name, data: j.result };
+    }
+    case "sync": {
+      const raw = query.get("datasets") ?? (Array.isArray(body?.datasets) ? body.datasets.join(",") : "");
+      const datasets = raw
+        ? String(raw)
+            .split(",")
+            .map((s) => s.trim())
+            .filter(Boolean)
+        : undefined;
+      const result = await doSaduckSync({ datasets, source: "api" });
+      return { httpStatus: result.ok ? 200 : 409, body: result };
+    }
+    case "manifest": {
+      const manifest = readSaduckManifest(path.resolve(config.saduckDir));
+      return manifest
+        ? { ok: true, manifest }
+        : bad(404, "尚无 SaDuck manifest，先触发一次同步（POST /api/saduck/sync）");
+    }
+    default:
+      return { httpStatus: 404, body: { ok: false, error: "未知 SaDuck 接口", endpoints: SADUCK_ENDPOINTS } };
+  }
+}
+
+// ---------------------------------------------------------------- agent surface
+
+async function agentState() {
+  return {
+    fenbi: { loggedIn: await hasAuthCookie(fenbiSession()).catch(() => false) },
+    saduck: { loggedIn: Boolean(await readSaduckToken(saduckWeb).catch(() => null)) },
+    sync: { running: syncState.running, lastSyncAt: syncState.lastSyncAt },
+    saduckSync: { running: saduckState.running, lastSyncAt: saduckState.lastSyncAt },
+    naoku: { indexed: Boolean(readNaokuManifest()) },
+  };
+}
+
 // ---------------------------------------------------------------- window
 
 function createWindow() {
@@ -444,6 +690,18 @@ function createWindow() {
     },
   });
   win.loadFile(path.join(ROOT, "ui", "index.html"));
+  const saduckSession = session.fromPartition(SADUCK_PARTITION);
+  win.webContents.on("did-attach-webview", (_event, contents) => {
+    const adopt = () => {
+      if (!contents.isDestroyed() && contents.getURL().startsWith(SADUCK_ORIGIN)) saduckWeb = contents;
+    };
+    if (contents.session === saduckSession) saduckWeb = contents;
+    contents.on("did-navigate", adopt);
+    contents.on("did-finish-load", adopt);
+    contents.once("destroyed", () => {
+      if (saduckWeb === contents) saduckWeb = null;
+    });
+  });
   win.webContents.setWindowOpenHandler(({ url }) => {
     if (/^https?:/i.test(url)) shell.openExternal(url);
     return { action: "deny" };
@@ -464,6 +722,9 @@ function publicConfig() {
     bootstrapSessionPath: config.bootstrapSessionPath,
     naokuDir: resolveNaokuDir(),
     naokuRepo: config.naokuRepo,
+    saduckDir: config.saduckDir,
+    saduckDatasets: config.saduckDatasets,
+    saduckBootstrapPath: config.saduckBootstrapPath,
     apiBase: `http://127.0.0.1:${config.port}`,
     version: APP_VERSION,
   };
@@ -479,6 +740,11 @@ function registerIpc() {
     if (typeof patch.naokuDir === "string" && patch.naokuDir.trim()) config.naokuDir = patch.naokuDir.trim();
     if (typeof patch.naokuRepo === "string" && patch.naokuRepo.trim()) config.naokuRepo = patch.naokuRepo.trim();
     if (Array.isArray(patch.datasets)) config.datasets = sanitizeDatasets(patch.datasets, config.datasets);
+    if (typeof patch.saduckDir === "string" && patch.saduckDir.trim()) config.saduckDir = patch.saduckDir.trim();
+    if (typeof patch.saduckBootstrapPath === "string") config.saduckBootstrapPath = patch.saduckBootstrapPath.trim();
+    if (Array.isArray(patch.saduckDatasets)) {
+      config.saduckDatasets = sanitizeSaduckDatasets(patch.saduckDatasets, config.saduckDatasets);
+    }
     saveConfig(config);
     broadcast("config:changed", publicConfig());
     return publicConfig();
@@ -493,6 +759,7 @@ function registerIpc() {
     lastError: syncState.lastError,
     lastSyncAt: syncState.lastSyncAt,
     hasSession: await hasAuthCookie(fenbiSession()).catch(() => false),
+    hasSaduckSession: Boolean(await readSaduckToken(saduckWeb).catch(() => null)),
     ...publicConfig(),
   }));
   ipcMain.handle("choose:dir", async () => {
@@ -507,6 +774,8 @@ function registerIpc() {
     if (/^https?:/i.test(String(url))) await shell.openExternal(String(url));
   });
   ipcMain.handle("tiku:home", () => TIKU_HOME);
+  ipcMain.handle("saduck:status", () => saduckStatus());
+  ipcMain.handle("saduck:sync", (_e, opts) => doSaduckSync(opts ?? {}));
   // 界面与 HTTP 层共用 handleNaoku，避免把脑库业务逻辑复制到 UI 侧。
   ipcMain.handle("naoku:query", (_e, { pathname, params } = {}) =>
     handleNaoku({ pathname, query: new URLSearchParams(params ?? {}) })
@@ -533,13 +802,24 @@ async function startApi() {
           dataDir: config.dataDir,
           datasets: config.datasets,
           hasSession: await hasAuthCookie(fenbiSession()).catch(() => false),
+          hasSaduckSession: Boolean(await readSaduckToken(saduckWeb).catch(() => null)),
+          saduckDir: config.saduckDir,
+          saduckDatasets: config.saduckDatasets,
         }),
+        agent: async () =>
+          buildAgentManifest({
+            baseUrl: `http://127.0.0.1:${config.port}`,
+            version: APP_VERSION,
+            state: await agentState(),
+          }),
+        agentSkill: (id) => readAgentSkill(id),
         datasets: async () => ({
           ok: true,
           datasets: DATASETS.map((d) => ({ ...d, enabled: config.datasets.includes(d.id) })),
         }),
         manifest: async () => readManifest(config.dataDir),
         sync: async ({ datasets, full }) => doSync({ datasets, full, source: "api" }),
+        saduck: handleSaduck,
         naoku: handleNaoku,
         tiku: async ({ pathname, query }) => {
           const prefix = query.get("prefix") === "shenlun" ? "shenlun" : "xingce";
@@ -625,6 +905,22 @@ async function runSelfTest() {
     result.bootstrap = imported;
     await new Promise((resolve) => setTimeout(resolve, 6000));
     result.summary = await doSync({ source: "selftest" });
+    result.saduck = { attempted: false, ok: false };
+    try {
+      const web = await waitForSaduckWeb(20000);
+      if (!web) {
+        result.saduck = { attempted: false, skipped: "no-webview" };
+      } else {
+        await bootstrapSaduckToken((m) => console.log(`[selftest] ${m}`));
+        if (await readSaduckToken(web)) {
+          result.saduck = { attempted: true, ...(await doSaduckSync({ source: "selftest" })) };
+        } else {
+          result.saduck = { attempted: false, skipped: "no-saduck-session" };
+        }
+      }
+    } catch (error) {
+      result.saduck = { attempted: true, ok: false, error: String(error?.message ?? error) };
+    }
     if (win && !win.isDestroyed()) {
       try {
         const image = await win.webContents.capturePage();
@@ -634,6 +930,16 @@ async function runSelfTest() {
       } catch (error) {
         result.screenshotError = String(error.message);
       }
+      try {
+        await win.webContents.executeJavaScript('document.querySelector(".nav-item[data-view=saduck]").click()');
+        await new Promise((resolve) => setTimeout(resolve, 1200));
+        const image = await win.webContents.capturePage();
+        const shot = path.join(SELFTEST_DIR, "window-saduck.png");
+        fs.writeFileSync(shot, image.toPNG());
+        result.screenshotSaduck = shot;
+      } catch (error) {
+        result.screenshotSaduckError = String(error.message);
+      }
     }
     result.status = {
       running: syncState.running,
@@ -641,7 +947,7 @@ async function runSelfTest() {
       lastError: syncState.lastError,
       apiUp: Boolean(apiServer),
     };
-    result.ok = Boolean(result.summary?.ok);
+    result.ok = Boolean(result.summary?.ok) && (!result.saduck.attempted || result.saduck.ok);
   } catch (error) {
     result.error = String(error?.message ?? error);
   } finally {

@@ -31,6 +31,16 @@ export function createApiServer({ port, host = "127.0.0.1", token = "", handlers
       if (token && req.headers["x-sync-token"] !== token) {
         return send(401, { ok: false, error: "需要 X-Sync-Token 请求头" });
       }
+      if (req.method === "GET" && url.pathname === "/api/agent") {
+        return send(200, await handlers.agent());
+      }
+      if (req.method === "GET" && url.pathname.startsWith("/api/agent/skills/")) {
+        const id = decodeURIComponent(url.pathname.slice("/api/agent/skills/".length));
+        const text = await handlers.agentSkill(id);
+        if (text == null) return send(404, { ok: false, error: `未知技能：${id}` });
+        res.writeHead(200, { "content-type": "text/markdown; charset=utf-8" });
+        return res.end(text);
+      }
       if (req.method === "GET" && url.pathname === "/api/status") {
         return send(200, await handlers.status());
       }
@@ -57,6 +67,16 @@ export function createApiServer({ port, host = "127.0.0.1", token = "", handlers
         const result = await handlers.naoku({ pathname, query: url.searchParams, method: req.method });
         return send(result?.httpStatus ?? 200, result?.body ?? result);
       }
+      if (url.pathname.startsWith("/api/saduck/")) {
+        const pathname = url.pathname.slice("/api/saduck/".length);
+        const expected = pathname === "sync" ? "POST" : "GET";
+        if (req.method !== expected) {
+          return send(405, { ok: false, error: `${pathname} 只接受 ${expected}` });
+        }
+        const body = expected === "POST" ? await readBody(req) : null;
+        const result = await handlers.saduck({ pathname, query: url.searchParams, body });
+        return send(result?.httpStatus ?? 200, result?.body ?? result);
+      }
       if (req.method === "POST" && url.pathname === "/api/sync") {
         const body = await readBody(req);
         const datasetsParam = url.searchParams.get("datasets");
@@ -76,6 +96,8 @@ export function createApiServer({ port, host = "127.0.0.1", token = "", handlers
           "GET /api/status",
           "GET /api/datasets",
           "GET /api/manifest",
+          "GET /api/agent",
+          "GET /api/agent/skills/<id>",
           "POST /api/sync?datasets=&full=",
           "GET /api/tiku/labels?prefix=",
           "GET /api/tiku/papers?prefix=&labelId=&page=&pageSize=",
@@ -90,6 +112,11 @@ export function createApiServer({ port, host = "127.0.0.1", token = "", handlers
           "GET /api/naoku/note?path=",
           "GET /api/naoku/for-question?qid=",
           "GET /api/naoku/points?模块=&大类=&limit=",
+          "GET /api/saduck/status",
+          "GET /api/saduck/datasets",
+          "GET /api/saduck/data?dataset=",
+          "POST /api/saduck/sync?datasets=",
+          "GET /api/saduck/manifest",
         ],
       });
     } catch (error) {
