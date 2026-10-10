@@ -228,6 +228,16 @@ npx electron . --self-test      # 全链路自测：导入会话 → 粉笔同�
 npx electron . --naoku-import   # 无窗口导入脑库副本并重建索引
 ```
 
+## 构建与发布（GitHub Actions）
+
+仓库自带 [`.github/workflows/build.yml`](.github/workflows/build.yml)，在 windows runner 上自动构建便携版：
+
+- **PR / push**：每次提交自动构建并上传构建产物（Actions 运行页可下载 zip）
+- **合并到 main**：自动更新预发布 [`main-latest`](https://github.com/HSJ-BanFan/exam-workbench/releases/tag/main-latest)，始终可下载最新的开发版
+- **推送 `v*` 标签**：发布正式 Release 并附带 zip（要求标签与 `package.json` 的 `version` 一致）
+
+发正式版：改 `package.json` 的 `version` → 合并到 main → `git tag vX.Y.Z && git push origin vX.Y.Z`。
+
 ## 隐私与合规（重要）
 
 - **凭据本地**：`sess/persistent` 等 Cookie 只存在于本机应用会话目录；仓库与导出中不含凭据

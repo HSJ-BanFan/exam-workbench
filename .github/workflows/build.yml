@@ -1,0 +1,84 @@
+name: build
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Syntax check
+        shell: pwsh
+        run: |
+          $files = Get-ChildItem src, mcp, ui, scripts -Recurse -Include *.mjs, *.js
+          foreach ($f in $files) {
+            node --check $f.FullName
+            if ($LASTEXITCODE -ne 0) { throw "syntax error: $($f.FullName)" }
+          }
+
+      - name: Package (win32-x64 portable)
+        run: npm run pack
+
+      - name: Zip
+        shell: pwsh
+        run: Compress-Archive -Path dist/exam-workbench-win32-x64 -DestinationPath dist/exam-workbench-win32-x64.zip
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: exam-workbench-win32-x64-${{ github.sha }}
+          path: dist/exam-workbench-win32-x64.zip
+          if-no-files-found: error
+
+      - name: Check tag matches package.json version
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        run: |
+          $tagVersion = "${{ github.ref_name }}".TrimStart("v")
+          $pkgVersion = (Get-Content package.json -Raw | ConvertFrom-Json).version
+          if ($pkgVersion -ne $tagVersion) {
+            throw "package.json version $pkgVersion does not match tag ${{ github.ref_name }}"
+          }
+
+      - name: Publish release (v* tag)
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $asset = "dist/exam-workbench-${{ github.ref_name }}-win32-x64.zip"
+          Copy-Item dist/exam-workbench-win32-x64.zip $asset
+          gh release create "${{ github.ref_name }}" $asset --title "${{ github.ref_name }}" --generate-notes
+
+      - name: Update main-latest pre-release (push to main)
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $asset = "dist/exam-workbench-main-win32-x64.zip"
+          Copy-Item dist/exam-workbench-win32-x64.zip $asset
+          gh release view main-latest *> $null
+          if ($LASTEXITCODE -ne 0) {
+            gh release create main-latest --prerelease --title "开发版（main 最新构建）" --notes "main 分支每次合并后自动构建；资产随最新提交覆盖更新。正式版本见 v* 标签的 Release。"
+          }
+          gh release upload main-latest $asset --clobber
