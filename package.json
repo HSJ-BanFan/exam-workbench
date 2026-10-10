@@ -22,7 +22,7 @@
     "pack": "electron-packager . exam-workbench --platform=win32 --arch=x64 --out=dist --overwrite --prune=true --ignore=dist --ignore=.selftest"
   },
   "engines": {
-    "node": ">=20"
+    "node": ">=22.12"
   },
   "devDependencies": {
     "@electron/packager": "^20.3.0",

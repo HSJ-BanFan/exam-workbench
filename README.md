@@ -36,7 +36,7 @@ your mistakes.*
 
 ## 快速开始
 
-环境：Node.js ≥ 20（开发）；运行打包版只需要 Windows。
+环境：Node.js ≥ 22.12（开发，`@electron/packager` 的要求）；运行打包版只需要 Windows。
 
 ```powershell
 npm install
