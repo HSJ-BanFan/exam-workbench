@@ -13,6 +13,7 @@ import {
   todayShanghai,
 } from "./fenbi-api.mjs";
 import { DATASETS, datasetById, NEVER_EXPOSED } from "./datasets.mjs";
+import { buildIndex, writeIndex } from "./naoku.mjs";
 
 const APP_VERSION = "0.1.0";
 
@@ -445,19 +446,57 @@ function renderReadmeMd({ dataDir }) {
 
 // ---------------------------------------------------------------- main
 
-export async function runSync({ cookieHeader, dataDir, datasets, full = false, log = () => {} }) {
+export async function runSync({ cookieHeader, dataDir, datasets, full = false, log = () => {}, naokuDir = "" }) {
   const startedAt = Date.now();
   const selected = new Set(datasets);
   const warnings = [];
   const summary = { ok: false, startedAt, dataDir, datasets: {}, warnings };
 
   ensureDir(dataDir);
-  log("读取账号信息…");
-  let client = makeClient(cookieHeader);
-  const user = redactUser(await client.getUser());
-  const category = await client.getExamCategory();
-  const prefix = category?.currentCourse?.prefix ?? "xingce";
-  if (prefix !== "xingce") client = makeClient(cookieHeader, { prefix });
+
+  // 脑库在本地，先建索引：没导入也只记 warning，不影响粉笔侧数据。
+  if (selected.has("naoku-index")) {
+    const vaultDir = naokuDir ? path.resolve(naokuDir) : path.join(dataDir, "考公脑库");
+    if (!fs.existsSync(vaultDir)) {
+      const hint = `脑库未导入（${vaultDir}）：先运行 naoku 导入（--naoku-import 或 POST /api/naoku/import）`;
+      warnings.push(hint);
+      log(hint);
+    } else {
+      log("建脑库索引…");
+      const index = await buildIndex({ vaultDir, log });
+      writeIndex({ outDir: path.join(dataDir, "脑库索引"), index });
+      summary.datasets["naoku-index"] = {
+        title: "考公脑库索引",
+        items: index.counts.真题,
+        counts: index.counts,
+        vault: index.vault,
+        files: [
+          "脑库索引/真题.json",
+          "脑库索引/考点.json",
+          "脑库索引/材料.json",
+          "脑库索引/manifest.json",
+          "脑库索引/README.md",
+        ],
+      };
+      for (const w of index.warnings) warnings.push(`脑库：${w}`);
+      log(`脑库索引 ✓（真题 ${index.counts.真题} / 考点 ${index.counts.考点} / 材料 ${index.counts.材料}）`);
+    }
+  }
+
+  // 只要选了粉笔侧数据集才需要登录会话与账号信息。
+  const needFenbi = [...selected].some((id) => datasetById(id)?.source !== "naoku");
+  let client = null;
+  let user = null;
+  let category = null;
+  let prefix = "xingce";
+  if (needFenbi) {
+    log("读取账号信息…");
+    client = makeClient(cookieHeader);
+    user = redactUser(await client.getUser());
+    category = await client.getExamCategory();
+    prefix = category?.currentCourse?.prefix ?? "xingce";
+    if (prefix !== "xingce") client = makeClient(cookieHeader, { prefix });
+  }
 
   const needHistory = ["history", "exercises", "wrong", "notes-collects"].some((id) => selected.has(id));
   const history = needHistory ? await fetchAllHistory(client) : { tabs: {}, historyItems: [] };

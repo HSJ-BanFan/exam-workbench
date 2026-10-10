@@ -101,10 +101,18 @@ try {
   const slSheet = await (await fetch(`${BASE}/api/tiku/paper-sheet?prefix=shenlun&paperId=4473791`)).json();
   results.bankShenlunSheet = { ok: slSheet.ok, questionIds: slSheet.data?.questionIds?.length ?? 0 };
 
+  // ---- 脑库索引（本地，不需要登录态） ----
+  const naokuStatus = await (await fetch(`${BASE}/api/naoku/status`)).json();
+  results.naoku = {
+    ok: naokuStatus.ok,
+    imported: naokuStatus.imported,
+    indexed: naokuStatus.indexed,
+  };
+
   const ok =
     results.status.ok &&
     results.status.hasSession &&
-    results.datasets.count === 9 &&
+    results.datasets.count === 10 &&
     results.sync.ok &&
     results.manifest.app === "exam-workbench" &&
     results.bankLabels.ok &&
@@ -118,7 +126,8 @@ try {
     results.bankShenlunLabels.ok &&
     results.bankShenlunLabels.count > 0 &&
     results.bankShenlunSheet.ok &&
-    results.bankShenlunSheet.questionIds > 0;
+    results.bankShenlunSheet.questionIds > 0 &&
+    results.naoku.ok === true;
   console.log("\n=== API TEST RESULT ===");
   console.log(JSON.stringify({ ok, ...results }, null, 2));
   process.exitCode = ok ? 0 : 1;

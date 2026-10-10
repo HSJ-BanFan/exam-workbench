@@ -287,7 +287,8 @@ export async function buildIndex({ vaultDir, log = logNothing }) {
       材料链接未命中: 材料未命中,
     },
     模块列表: modules,
-    vault: { dir: root, commit: git(["rev-parse", "HEAD"], { cwd: root, allowFail: true }) },
+    // 目录不在仓库里时不要借用外层仓库的 HEAD 冒充脑库版本。
+    vault: { dir: root, commit: isClone(root) ? git(["rev-parse", "HEAD"], { cwd: root, allowFail: true }) : null },
     scannedAt: startedAt,
   };
   log(

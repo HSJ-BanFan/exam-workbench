@@ -1,11 +1,13 @@
 // 数据集注册表：定义可同步的数据类别、初始推荐与敏感度说明。
 // 用户可在应用「数据同步」页勾选；本地 agent 只应读取被选中的数据子目录。
+// source 标明数据来源："fenbi" 需要登录会话拉取；"naoku" 来自本地脑库副本，不联网。
 
 export const DATASETS = [
   {
     id: "history",
     title: "练习记录",
     dir: "练习记录",
+    source: "fenbi",
     recommended: true,
     sensitivity: "低",
     description:
@@ -16,6 +18,7 @@ export const DATASETS = [
     id: "exercises",
     title: "题解与逐题作答",
     dir: "题解",
+    source: "fenbi",
     recommended: true,
     sensitivity: "中（仅本人练习过的题目与解析）",
     description:
@@ -26,6 +29,7 @@ export const DATASETS = [
     id: "wrong",
     title: "错题本快照",
     dir: "错题本",
+    source: "fenbi",
     recommended: true,
     sensitivity: "中（本人错题集合）",
     description: "错题按知识点树聚合，含题干、我的答案、正确答案与解析（来自已同步的练习）。",
@@ -35,6 +39,7 @@ export const DATASETS = [
     id: "ability",
     title: "能力报告",
     dir: "能力报告",
+    source: "fenbi",
     recommended: true,
     sensitivity: "低",
     description: "粉笔官方能力分析：预测分、排名、模块正确率、目标正确率、趋势。",
@@ -44,6 +49,7 @@ export const DATASETS = [
     id: "notes-collects",
     title: "笔记与收藏",
     dir: "笔记与收藏",
+    source: "fenbi",
     recommended: true,
     sensitivity: "中（本人笔记内容）",
     description: "本人笔记/收藏的题目清单与数量统计。当前为空时输出空表。",
@@ -53,6 +59,7 @@ export const DATASETS = [
     id: "mock-exams",
     title: "模考记录",
     dir: "模考记录",
+    source: "fenbi",
     recommended: true,
     sensitivity: "低",
     description: "粉笔模考大赛的完成记录列表（当前账号无数据时输出占位说明）。",
@@ -62,6 +69,7 @@ export const DATASETS = [
     id: "shenlun-history",
     title: "申论练习记录",
     dir: "申论练习记录",
+    source: "fenbi",
     recommended: true,
     sensitivity: "低",
     description: "申论练习历史列表与批改额度（leftCount/pdpgLeftCount）。当前账号无申论数据时输出空表。",
@@ -71,6 +79,7 @@ export const DATASETS = [
     id: "shenlun-details",
     title: "申论作答与批改",
     dir: "申论作答与批改",
+    source: "fenbi",
     recommended: true,
     sensitivity: "中（本人申论作答与批改结果）",
     description:
@@ -81,11 +90,23 @@ export const DATASETS = [
     id: "question-meta",
     title: "题目元数据（全站正确率/易错项）",
     dir: "题目元数据",
+    source: "fenbi",
     recommended: false,
     sensitivity: "低（平台统计）",
     description:
       "对练习过的题目抓取全站正确率、易错选项等统计。请求数随题量线性增长，默认关闭。",
     agentUse: "难度校准：区分「大家都错」与「只有我错」，避免错误归因。",
+  },
+  {
+    id: "naoku-index",
+    title: "考公脑库索引",
+    dir: "脑库索引",
+    source: "naoku",
+    recommended: true,
+    sensitivity: "低（第三方公开标注库的索引）",
+    description:
+      "第三方标注库「考公脑库」（Obsidian vault，CC BY-NC 4.0）的索引：真题的粉笔题号 → 考点 / 材料 / 相关题的连接关系与母题摘要。只覆盖行测「资料分析」「判断推理」两个模块；不含题面原文、材料正文与图片，题面用 /api/tiku/* 按 qid 取。",
+    agentUse: "把本人做过的题按 qid 接到考点与母题上，做考点级归因、同类题推荐与跨卷聚合。",
   },
 ];
 
