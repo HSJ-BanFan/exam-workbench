@@ -13,6 +13,22 @@ const BASE = `http://127.0.0.1:${PORT}`;
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+// 端口被别的实例占用时，下面的请求会打到那个实例上，测出来的结果与本次代码无关。
+async function assertPortFree() {
+  try {
+    const res = await fetch(`${BASE}/api/status`, { signal: AbortSignal.timeout(1500) });
+    if (res.ok) {
+      throw new Error(
+        `端口 ${PORT} 已有实例在响应 /api/status（例如打包版还在运行，或上一次运行的进程没退出）。` +
+          "本测试需要独占该端口，请先关闭它再重跑。"
+      );
+    }
+  } catch (error) {
+    if (/已有实例/.test(String(error?.message))) throw error;
+    /* 连接被拒绝，说明端口空闲 */
+  }
+}
+
 async function waitForApi(timeoutMs = 40000) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
@@ -30,6 +46,12 @@ async function waitForApi(timeoutMs = 40000) {
 // 用法: node scripts/api-test.mjs [打包后的 exe 路径]
 const packagedExe = process.argv[2];
 const results = {};
+try {
+  await assertPortFree();
+} catch (error) {
+  console.error(`API 测试无法开始: ${error.message}`);
+  process.exit(1);
+}
 const child = packagedExe
   ? spawn(packagedExe, ["--api-test"], { stdio: "inherit" })
   : spawn(electronPath, [".", "--api-test"], {
