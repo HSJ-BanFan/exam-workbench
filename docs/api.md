@@ -88,6 +88,10 @@
 
 `POST /api/saduck/sync[?datasets=time,plan]` 同步所选的本人数据。所有数据集均成功或仅有会员限制时返回 HTTP 200。任一数据集状态为 `error` 时返回 HTTP 409。
 
+未提供 `datasets` 时，应用使用已配置的默认选择。请求体中的 `{"datasets": []}` 或查询参数 `?datasets=` 表示不选数据集。查询参数存在时优先于请求体。
+
+空选择仍会校验 SaDuck 会话，并写入空 manifest 和警告。此时不会调用数据集接口，结果返回 HTTP 200。
+
 失败响应保留顶层 `ok: false` 和 `error`，并返回 `datasets` 与 `manifest` 路径。`datasets[id].status` 分别为 `ok`、`vip` 或 `error`。读取 `datasets[id].message` 可查看对应数据集的详细原因。
 
 其他成功数据集及其文件不会因同批次的失败而撤销，manifest 会记录本次各数据集状态。
