@@ -236,9 +236,9 @@ npx electron . --naoku-import   # 无窗口导入脑库副本并重建索引
 
 仓库自带 [`.github/workflows/build.yml`](.github/workflows/build.yml)，在 windows runner 上自动构建便携版：
 
-- **PR / push**：每次提交自动构建并上传构建产物（Actions 运行页可下载 zip）
-- **合并到 main**：自动更新预发布 [`main-latest`](https://github.com/HSJ-BanFan/exam-workbench/releases/tag/main-latest)，始终可下载最新的开发版
-- **推送 `v*` 标签**：发布正式 Release 并附带 zip（要求标签与 `package.json` 的 `version` 一致）
+- 测试通过且打包完成后，工作流会上传按提交 SHA 命名的 zip。PR 和分支手动运行可在 Actions 运行页下载产物，且不会发布 Release
+- **推送到 `main`**：更新预发布 [`main-latest`](https://github.com/HSJ-BanFan/exam-workbench/releases/tag/main-latest)
+- **推送 `v*` 标签或在 `v*` 标签上手动运行**：发布正式 Release 并附带 zip；标签必须与 `package.json` 的 `version` 一致
 
 发正式版：改 `package.json` 的 `version` → 合并到 main → `git tag vX.Y.Z && git push origin vX.Y.Z`。
 
