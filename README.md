@@ -91,6 +91,7 @@ SaDuck 的输出写在同一层级的 `SaDuck同步/` 目录（结构一致：�
   计时记录 / 每日打卡 / 生词锦囊 / 晨读收藏 / 申论练习记录 / 错题列表 / 行测练习记录；
   词语辨析练习组属站点内容，默认不同步；
 - 「设置」中可修改 SaDuck 输出目录；token 不进入输出目录（只存在应用会话与引导文件）。
+- 任一已选数据集失败时，同步结果会标为失败。其他成功数据集会保留，manifest 会记录各项状态。会员限制仍单独显示，不计为同步失败。
 
 已在本地实测（2026-10-10）：开发版与打包版 `--self-test` 均 PASS；`scripts/api-test.mjs` 全绿（含 SaDuck 断言）；
 输出目录通过考公库 `vault check`（0 错误 0 警告）。
@@ -218,6 +219,7 @@ Claude Code（项目根 `.mcp.json`）：
 ## 开发与验证
 
 ```powershell
+npm test                        # 离线合成数据回归测试
 npm start                       # 开发运行
 npm run pack                    # 打包
 node scripts/dev-sync-test.mjs  # 不用 UI 直接跑同步引擎（SESSION_PATH 指向会话文件）

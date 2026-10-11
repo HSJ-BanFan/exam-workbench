@@ -84,6 +84,26 @@
 | `GET /api/naoku/for-question?qid=` | 按粉笔题号取「真题 → 考点/材料/相关题」 |
 | `GET /api/naoku/points?模块=&大类=&limit=` | 考点列表（含母题摘要），供考点级复习 |
 
+### SaDuck 同步结果
+
+`POST /api/saduck/sync[?datasets=time,plan]` 同步所选的本人数据。所有数据集均成功或仅有会员限制时返回 HTTP 200。任一数据集状态为 `error` 时返回 HTTP 409。
+
+失败响应保留顶层 `ok: false` 和 `error`，并返回 `datasets` 与 `manifest` 路径。`datasets[id].status` 分别为 `ok`、`vip` 或 `error`。读取 `datasets[id].message` 可查看对应数据集的详细原因。
+
+其他成功数据集及其文件不会因同批次的失败而撤销，manifest 会记录本次各数据集状态。
+
+```json
+{
+  "ok": false,
+  "error": "部分数据集同步失败：每日打卡（plan）",
+  "datasets": {
+    "time": { "title": "计时记录", "items": 1, "status": "ok", "message": "", "files": ["计时记录/计时记录.md", "计时记录/time.json"] },
+    "plan": { "title": "每日打卡", "items": 0, "status": "error", "message": "503 synthetic failure", "files": [] }
+  },
+  "manifest": "<configured SaDuck output directory>/manifest.json"
+}
+```
+
 ## 7. 脑库索引接口（`/api/naoku/*`）
 
 数据来源是第三方 Obsidian vault「[考公脑库](https://github.com/ERRRC/kaogongzhentizhengliu)」，只覆盖
