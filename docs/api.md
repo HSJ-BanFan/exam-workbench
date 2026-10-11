@@ -90,7 +90,7 @@
 
 未提供 `datasets` 时，应用使用已配置的默认选择。请求体中的 `{"datasets": []}` 或查询参数 `?datasets=` 表示不选数据集。查询参数存在时优先于请求体。
 
-空选择仍会校验 SaDuck 会话，并写入空 manifest 和警告。此时不会调用数据集接口，结果返回 HTTP 200。
+SaDuck 页面可用且会话校验通过时，空选择会写入空 manifest 和警告，不调用数据集接口，并返回 HTTP 200。页面不可用或会话校验失败时仍会返回错误状态。
 
 失败响应保留顶层 `ok: false` 和 `error`，并返回 `datasets` 与 `manifest` 路径。`datasets[id].status` 分别为 `ok`、`vip` 或 `error`。读取 `datasets[id].message` 可查看对应数据集的详细原因。
 
