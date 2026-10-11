@@ -22,6 +22,7 @@ import {
   readSaduckManifest,
   saduckDatasetById,
 } from "./saduck.mjs";
+import { createSaduckSyncController } from "./saduck-sync-controller.mjs";
 import { buildAgentManifest, readAgentSkill } from "./agent-surface.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -571,47 +572,18 @@ async function doSync({ datasets, full = false, source = "app" } = {}) {
 
 // ---------------------------------------------------------------- saduck sync
 
-async function doSaduckSync({ datasets, source = "app" } = {}) {
-  if (saduckState.running) {
-    return { ok: false, error: "busy", message: "已有 SaDuck 同步在进行中" };
-  }
-  saduckState.running = true;
-  saduckState.lastError = null;
-  const log = (message) => {
-    console.log(`[saduck:${source}] ${message}`);
-    broadcast("sync:progress", { type: "log", message: `SaDuck：${message}`, at: Date.now() });
-  };
-  broadcast("sync:progress", { type: "start", at: Date.now() });
-  try {
+const saduckSyncController = createSaduckSyncController({
+  state: saduckState,
+  getConfiguredDatasets: () => config.saduckDatasets,
+  runSelected: async ({ datasets, source, log }) => {
     const web = await waitForSaduckWeb(15000);
     if (!web) throw new Error("SaDuck 页面未就绪：先打开「SaDuck」页");
     await bootstrapSaduckToken(log);
-    const selected = Array.isArray(datasets) && datasets.length ? datasets : config.saduckDatasets;
-    const summary = await runSaduckSync({ web, outDir: path.resolve(config.saduckDir), datasets: selected, log });
-    saduckState.lastSummary = summary;
-    saduckState.lastSyncAt = Date.now();
-    if (!summary.ok) {
-      saduckState.lastError = summary.error || "SaDuck 同步部分失败";
-      log(`同步部分失败：${saduckState.lastError}`);
-      broadcast("sync:progress", {
-        type: "error",
-        message: saduckState.lastError,
-        summary,
-        at: Date.now(),
-      });
-    } else {
-      broadcast("sync:progress", { type: "done", summary, at: Date.now() });
-    }
-    return summary;
-  } catch (error) {
-    saduckState.lastError = String(error?.message ?? error);
-    log(`同步失败：${saduckState.lastError}`);
-    broadcast("sync:progress", { type: "error", message: saduckState.lastError, at: Date.now() });
-    return { ok: false, error: saduckState.lastError };
-  } finally {
-    saduckState.running = false;
-  }
-}
+    return runSaduckSync({ web, outDir: path.resolve(config.saduckDir), datasets, log });
+  },
+  broadcast,
+  writeLog: (source, message) => console.log(`[saduck:${source}] ${message}`),
+});
 
 const SADUCK_ENDPOINTS = ["status", "datasets", "data?dataset=", "sync?datasets=", "manifest"];
 
@@ -648,15 +620,7 @@ async function handleSaduck({ pathname, query, body }) {
       return { ok: true, dataset: ds.id, name: ds.name, data: j.result };
     }
     case "sync": {
-      const raw = query.get("datasets") ?? (Array.isArray(body?.datasets) ? body.datasets.join(",") : "");
-      const datasets = raw
-        ? String(raw)
-            .split(",")
-            .map((s) => s.trim())
-            .filter(Boolean)
-        : undefined;
-      const result = await doSaduckSync({ datasets, source: "api" });
-      return { httpStatus: result.ok ? 200 : 409, body: result };
+      return saduckSyncController.fromHttp({ query, body });
     }
     case "manifest": {
       const manifest = readSaduckManifest(path.resolve(config.saduckDir));
@@ -786,7 +750,7 @@ function registerIpc() {
   });
   ipcMain.handle("tiku:home", () => TIKU_HOME);
   ipcMain.handle("saduck:status", () => saduckStatus());
-  ipcMain.handle("saduck:sync", (_e, opts) => doSaduckSync(opts ?? {}));
+  ipcMain.handle("saduck:sync", (_e, opts) => saduckSyncController.fromIpc(opts ?? {}));
   // 界面与 HTTP 层共用 handleNaoku，避免把脑库业务逻辑复制到 UI 侧。
   ipcMain.handle("naoku:query", (_e, { pathname, params } = {}) =>
     handleNaoku({ pathname, query: new URLSearchParams(params ?? {}) })
@@ -924,7 +888,7 @@ async function runSelfTest() {
       } else {
         await bootstrapSaduckToken((m) => console.log(`[selftest] ${m}`));
         if (await readSaduckToken(web)) {
-          result.saduck = { attempted: true, ...(await doSaduckSync({ source: "selftest" })) };
+          result.saduck = { attempted: true, ...(await saduckSyncController.fromIpc({ source: "selftest" })) };
         } else {
           result.saduck = { attempted: false, skipped: "no-saduck-session" };
         }
