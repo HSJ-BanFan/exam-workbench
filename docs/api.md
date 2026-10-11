@@ -92,7 +92,7 @@
 
 SaDuck 页面可用且会话校验通过时，空选择会写入空 manifest 和警告，不调用数据集接口，并返回 HTTP 200。页面不可用或会话校验失败时仍会返回错误状态。
 
-失败响应保留顶层 `ok: false` 和 `error`，并返回 `datasets` 与 `manifest` 路径。`datasets[id].status` 分别为 `ok`、`vip` 或 `error`。读取 `datasets[id].message` 可查看对应数据集的详细原因。
+数据集同步完成但有数据集失败时，响应保留顶层 `ok: false` 和 `error`，并返回 `datasets` 与 `manifest` 路径。页面不可用、会话校验失败或已有同步任务运行时，错误响应不包含这两项。`datasets[id].status` 分别为 `ok`、`vip` 或 `error`。读取 `datasets[id].message` 可查看对应数据集的详细原因。
 
 其他成功数据集及其文件不会因同批次的失败而撤销，manifest 会记录本次各数据集状态。
 

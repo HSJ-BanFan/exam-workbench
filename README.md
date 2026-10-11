@@ -218,8 +218,10 @@ Claude Code（项目根 `.mcp.json`）：
 
 ## 开发与验证
 
+运行 `npm test` 可执行使用合成数据的离线回归测试。
+
 ```powershell
-npm test                        # 离线合成数据回归测试
+npm test
 npm start                       # 开发运行
 npm run pack                    # 打包
 node scripts/dev-sync-test.mjs  # 不用 UI 直接跑同步引擎（SESSION_PATH 指向会话文件）
