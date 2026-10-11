@@ -590,7 +590,18 @@ async function doSaduckSync({ datasets, source = "app" } = {}) {
     const summary = await runSaduckSync({ web, outDir: path.resolve(config.saduckDir), datasets: selected, log });
     saduckState.lastSummary = summary;
     saduckState.lastSyncAt = Date.now();
-    broadcast("sync:progress", { type: "done", summary, at: Date.now() });
+    if (!summary.ok) {
+      saduckState.lastError = summary.error || "SaDuck 同步部分失败";
+      log(`同步部分失败：${saduckState.lastError}`);
+      broadcast("sync:progress", {
+        type: "error",
+        message: saduckState.lastError,
+        summary,
+        at: Date.now(),
+      });
+    } else {
+      broadcast("sync:progress", { type: "done", summary, at: Date.now() });
+    }
     return summary;
   } catch (error) {
     saduckState.lastError = String(error?.message ?? error);

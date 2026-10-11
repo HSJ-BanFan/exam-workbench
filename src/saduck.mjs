@@ -296,7 +296,7 @@ function renderReadmeMd(outDir, stamp) {
 export async function runSaduckSync({ web, outDir, datasets, log = () => {} }) {
   const startedAt = Date.now();
   const stamp = fmtTime(startedAt);
-  const selected = SADUCK_DATASETS.filter((d) => datasets.includes(d.id));
+  const selected = SADUCK_DATASETS.filter((d) => Array.isArray(datasets) && datasets.includes(d.id));
   const warnings = [];
   const entries = {};
   const written = [];
@@ -318,6 +318,7 @@ export async function runSaduckSync({ web, outDir, datasets, log = () => {} }) {
     vipEndTime: verify.result?.vipEndTime ?? null,
   };
   if (verify.code === 102) warnings.push("会员状态为受限（code 102）");
+  if (selected.length === 0) warnings.push("未选择任何要同步的数据集");
 
   for (const ds of selected) {
     try {
@@ -400,8 +401,21 @@ export async function runSaduckSync({ web, outDir, datasets, log = () => {} }) {
   };
   writeJson(path.join(outDir, "manifest.json"), manifest);
 
+  const failed = Object.entries(entries).filter(([, v]) => v.status === "error");
+  const isOk = failed.length === 0;
+  let errorText;
+  if (!isOk) {
+    const names = failed.map(([id, v]) => (v.title ? `${v.title}（${id}）` : id)).join("、");
+    if (failed.length === selected.length && selected.length > 0) {
+      errorText = `数据集同步失败：${names}`;
+    } else {
+      errorText = `部分数据集同步失败：${names}`;
+    }
+  }
+
   return {
-    ok: true,
+    ok: isOk,
+    ...(errorText ? { error: errorText } : {}),
     startedAt,
     finishedAt,
     outDir,
