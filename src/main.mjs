@@ -22,7 +22,7 @@ import {
   readSaduckManifest,
   saduckDatasetById,
 } from "./saduck.mjs";
-import { createSaduckSyncController } from "./saduck-sync-controller.mjs";
+import { createSaduckSyncAdapters, createSaduckSyncController } from "./saduck-sync-controller.mjs";
 import { buildAgentManifest, readAgentSkill } from "./agent-surface.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -584,6 +584,7 @@ const saduckSyncController = createSaduckSyncController({
   broadcast,
   writeLog: (source, message) => console.log(`[saduck:${source}] ${message}`),
 });
+const saduckSyncAdapters = createSaduckSyncAdapters(saduckSyncController);
 
 const SADUCK_ENDPOINTS = ["status", "datasets", "data?dataset=", "sync?datasets=", "manifest"];
 
@@ -620,7 +621,7 @@ async function handleSaduck({ pathname, query, body }) {
       return { ok: true, dataset: ds.id, name: ds.name, data: j.result };
     }
     case "sync": {
-      return saduckSyncController.fromHttp({ query, body });
+      return saduckSyncAdapters.handleHttpSync({ pathname, query, body });
     }
     case "manifest": {
       const manifest = readSaduckManifest(path.resolve(config.saduckDir));
@@ -750,7 +751,7 @@ function registerIpc() {
   });
   ipcMain.handle("tiku:home", () => TIKU_HOME);
   ipcMain.handle("saduck:status", () => saduckStatus());
-  ipcMain.handle("saduck:sync", (_e, opts) => saduckSyncController.fromIpc(opts ?? {}));
+  saduckSyncAdapters.registerIpc(ipcMain);
   // 界面与 HTTP 层共用 handleNaoku，避免把脑库业务逻辑复制到 UI 侧。
   ipcMain.handle("naoku:query", (_e, { pathname, params } = {}) =>
     handleNaoku({ pathname, query: new URLSearchParams(params ?? {}) })

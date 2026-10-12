@@ -1,3 +1,5 @@
+import { resolveSaduckDatasets } from "./saduck.mjs";
+
 export function createSaduckSyncController({
   state,
   getConfiguredDatasets,
@@ -18,7 +20,8 @@ export function createSaduckSyncController({
     broadcast("sync:progress", { type: "start", at: Date.now() });
     try {
       const datasets = selection.kind === "explicit" ? selection.datasets : getConfiguredDatasets();
-      const summary = await runSelected({ datasets, source, log });
+      const resolved = resolveSaduckDatasets(datasets);
+      const summary = await runSelected({ datasets: resolved.map((dataset) => dataset.id), source, log });
       state.lastSummary = summary;
       state.lastSyncAt = Date.now();
       if (!summary.ok) {
@@ -69,6 +72,19 @@ export function createSaduckSyncController({
         httpStatus: summary.ok ? 200 : 409,
         body: summary,
       }));
+    },
+  };
+}
+
+export function createSaduckSyncAdapters(controller) {
+  return {
+    registerIpc(ipcMain) {
+      ipcMain.handle("saduck:sync", (_event, options) => controller.fromIpc(options ?? {}));
+    },
+
+    handleHttpSync({ pathname, query, body } = {}) {
+      if (pathname !== "sync") return { httpStatus: 404, body: { ok: false, error: "未知 SaDuck 同步接口" } };
+      return controller.fromHttp({ query, body });
     },
   };
 }

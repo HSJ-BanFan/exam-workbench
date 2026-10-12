@@ -111,6 +111,13 @@ export function saduckDatasetById(id) {
   return SADUCK_DATASETS.find((d) => d.id === id) ?? null;
 }
 
+export function resolveSaduckDatasets(ids) {
+  if (!Array.isArray(ids)) throw new TypeError("SaDuck 数据集列表必须是数组");
+  const unknown = [...new Set(ids.filter((id) => !SADUCK_DATASET_IDS.includes(id)))];
+  if (unknown.length) throw new Error(`未知数据集：${unknown.map(String).join("、")}`);
+  return SADUCK_DATASETS.filter((dataset) => ids.includes(dataset.id));
+}
+
 export function maskEmail(value) {
   const s = String(value ?? "");
   const at = s.indexOf("@");
@@ -296,7 +303,7 @@ function renderReadmeMd(outDir, stamp) {
 export async function runSaduckSync({ web, outDir, datasets, log = () => {} }) {
   const startedAt = Date.now();
   const stamp = fmtTime(startedAt);
-  const selected = SADUCK_DATASETS.filter((d) => Array.isArray(datasets) && datasets.includes(d.id));
+  const selected = resolveSaduckDatasets(datasets);
   const warnings = [];
   const entries = {};
   const written = [];

@@ -227,7 +227,7 @@ test("unknown dataset IDs: preserve existing output and stop before session veri
   }
 });
 
-async function loadSaduckSyncController() {
+async function loadSaduckSyncModule() {
   let module;
   try {
     module = await import("../src/saduck-sync-controller.mjs");
@@ -235,7 +235,8 @@ async function loadSaduckSyncController() {
     assert.fail("SaDuck request selection behavior requires a testable controller: " + (error.code ?? error.message));
   }
   assert.equal(typeof module.createSaduckSyncController, "function", "controller factory must be exported");
-  return module.createSaduckSyncController;
+  assert.equal(typeof module.createSaduckSyncAdapters, "function", "production adapters must be exported");
+  return module;
 }
 
 function makeControllerHarness({ summary, runSelected } = {}) {
@@ -243,17 +244,20 @@ function makeControllerHarness({ summary, runSelected } = {}) {
   const calls = [];
   const events = [];
   const getConfiguredDatasets = () => ["time", "plan"];
-  const controllerPromise = loadSaduckSyncController().then((createSaduckSyncController) => createSaduckSyncController({
-    state,
-    getConfiguredDatasets,
-    runSelected: runSelected ?? (async ({ datasets, source }) => {
-      calls.push({ datasets: [...datasets], source });
-      return summary ?? makeSaduckSummary();
-    }),
-    broadcast: (channel, event) => events.push({ channel, event }),
-    writeLog: () => {},
-  }));
-  return { state, calls, events, controllerPromise };
+  const instancePromise = loadSaduckSyncModule().then(({ createSaduckSyncController, createSaduckSyncAdapters }) => {
+    const controller = createSaduckSyncController({
+      state,
+      getConfiguredDatasets,
+      runSelected: runSelected ?? (async ({ datasets, source }) => {
+        calls.push({ datasets: [...datasets], source });
+        return summary ?? makeSaduckSummary();
+      }),
+      broadcast: (channel, event) => events.push({ channel, event }),
+      writeLog: () => {},
+    });
+    return { controller, adapters: createSaduckSyncAdapters(controller) };
+  });
+  return { state, calls, events, instancePromise };
 }
 
 function makeSaduckSummary({ ok = true, error } = {}) {
@@ -273,12 +277,19 @@ function makeSaduckSummary({ ok = true, error } = {}) {
   return summary;
 }
 
-async function withSaduckApi(controller, run) {
+function registerSaduckIpc(adapters) {
+  const handlers = new Map();
+  adapters.registerIpc({ handle: (channel, handler) => handlers.set(channel, handler) });
+  assert.equal(typeof handlers.get("saduck:sync"), "function");
+  return handlers.get("saduck:sync");
+}
+
+async function withSaduckApi(adapters, run) {
   const server = await createApiServer({
     port: 0,
     host: "127.0.0.1",
     token: "",
-    handlers: { saduck: (input) => controller.fromHttp(input) },
+    handlers: { saduck: (input) => adapters.handleHttpSync(input) },
     onLog: () => {},
   });
   const port = server.address().port;
@@ -291,11 +302,12 @@ async function withSaduckApi(controller, run) {
 
 test("IPC selection: only omitted or non-array values use configured defaults", async () => {
   const harness = makeControllerHarness();
-  const controller = await harness.controllerPromise;
+  const { adapters } = await harness.instancePromise;
+  const invoke = registerSaduckIpc(adapters);
 
-  await controller.fromIpc({});
-  await controller.fromIpc({ datasets: [] });
-  await controller.fromIpc({ datasets: "time" });
+  await invoke({}, {});
+  await invoke({}, { datasets: [] });
+  await invoke({}, { datasets: "time" });
 
   assert.deepEqual(harness.calls.map((call) => call.datasets), [["time", "plan"], [], ["time", "plan"]]);
   assert.deepEqual(harness.calls.map((call) => call.source), ["app", "app", "app"]);
@@ -304,10 +316,10 @@ test("IPC selection: only omitted or non-array values use configured defaults", 
 
 test("HTTP selection: an empty query or body list stays empty through the API server", async () => {
   const harness = makeControllerHarness();
-  const controller = await harness.controllerPromise;
+  const { adapters } = await harness.instancePromise;
   const summary = makeSaduckSummary();
 
-  await withSaduckApi(controller, async (port) => {
+  await withSaduckApi(adapters, async (port) => {
     const queryResponse = await fetch("http://127.0.0.1:" + port + "/api/saduck/sync?datasets=", {
       method: "POST",
       headers: { "content-type": "application/json", connection: "close" },
@@ -345,12 +357,48 @@ test("HTTP selection: an empty query or body list stays empty through the API se
   assert.deepEqual(harness.calls.map((call) => call.source), ["api", "api", "api", "api"]);
 });
 
+test("unknown dataset ID: HTTP adapter returns 409 before main-process work", async () => {
+  const harness = makeControllerHarness();
+  const { adapters } = await harness.instancePromise;
+
+  await withSaduckApi(adapters, async (port) => {
+    const response = await fetch("http://127.0.0.1:" + port + "/api/saduck/sync?datasets=unknown-synthetic-id", {
+      method: "POST",
+      headers: { "content-type": "application/json", connection: "close" },
+      body: JSON.stringify({}),
+    });
+    assert.equal(response.status, 409);
+    const summary = await response.json();
+    assert.equal(summary.ok, false);
+    assert.match(summary.error, /unknown-synthetic-id/);
+  });
+
+  assert.deepEqual(harness.calls, []);
+  assert.equal(harness.state.lastSyncAt, null);
+  assert.match(harness.state.lastError, /unknown-synthetic-id/);
+  assert.equal(harness.events.at(-1).event.type, "error");
+});
+
+test("unknown dataset ID: registered IPC adapter returns a failure before main-process work", async () => {
+  const harness = makeControllerHarness();
+  const { adapters } = await harness.instancePromise;
+  const invoke = registerSaduckIpc(adapters);
+
+  const summary = await invoke({}, { datasets: ["unknown-synthetic-id"] });
+  assert.equal(summary.ok, false);
+  assert.match(summary.error, /unknown-synthetic-id/);
+  assert.deepEqual(harness.calls, []);
+  assert.equal(harness.state.lastSyncAt, null);
+  assert.match(harness.state.lastError, /unknown-synthetic-id/);
+  assert.equal(harness.events.at(-1).event.type, "error");
+});
+
 test("failed summary: state and progress report the dataset failure", async () => {
   const summary = makeSaduckSummary({ ok: false, error: "部分数据集同步失败：每日打卡（plan）" });
   const harness = makeControllerHarness({ summary });
-  const controller = await harness.controllerPromise;
+  const { adapters } = await harness.instancePromise;
 
-  assert.deepEqual(await controller.fromIpc({ datasets: ["plan"] }), summary);
+  assert.deepEqual(await registerSaduckIpc(adapters)({}, { datasets: ["plan"] }), summary);
   assert.equal(harness.state.lastError, summary.error);
   assert.deepEqual(harness.state.lastSummary, summary);
   assert.equal(typeof harness.state.lastSyncAt, "number");
@@ -366,9 +414,9 @@ test("failed summary: state and progress report the dataset failure", async () =
 test("HTTP failure: a 409 keeps the complete sync summary body", async () => {
   const summary = makeSaduckSummary({ ok: false, error: "部分数据集同步失败：每日打卡（plan）" });
   const harness = makeControllerHarness({ summary });
-  const controller = await harness.controllerPromise;
+  const { adapters } = await harness.instancePromise;
 
-  await withSaduckApi(controller, async (port) => {
+  await withSaduckApi(adapters, async (port) => {
     const response = await fetch("http://127.0.0.1:" + port + "/api/saduck/sync?datasets=plan", {
       method: "POST",
       headers: { "content-type": "application/json", connection: "close" },
@@ -382,8 +430,8 @@ test("HTTP failure: a 409 keeps the complete sync summary body", async () => {
 test("busy and thrown failures preserve the existing controller outcomes", async () => {
   const busyHarness = makeControllerHarness();
   busyHarness.state.running = true;
-  const busyController = await busyHarness.controllerPromise;
-  assert.deepEqual(await busyController.fromIpc({ datasets: [] }), {
+  const { adapters: busyAdapters } = await busyHarness.instancePromise;
+  assert.deepEqual(await registerSaduckIpc(busyAdapters)({}, { datasets: ["unknown-synthetic-id"] }), {
     ok: false,
     error: "busy",
     message: "已有 SaDuck 同步在进行中",
@@ -392,8 +440,8 @@ test("busy and thrown failures preserve the existing controller outcomes", async
   assert.deepEqual(busyHarness.events, []);
 
   const failedHarness = makeControllerHarness({ runSelected: async () => { throw new Error("synthetic run failure"); } });
-  const failedController = await failedHarness.controllerPromise;
-  assert.deepEqual(await failedController.fromIpc({ datasets: [] }), { ok: false, error: "synthetic run failure" });
+  const { adapters: failedAdapters } = await failedHarness.instancePromise;
+  assert.deepEqual(await registerSaduckIpc(failedAdapters)({}, { datasets: [] }), { ok: false, error: "synthetic run failure" });
   assert.equal(failedHarness.state.lastError, "synthetic run failure");
   assert.equal(failedHarness.state.running, false);
   assert.equal(failedHarness.events.at(-1).event.type, "error");
