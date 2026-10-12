@@ -3,10 +3,20 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { buildAgentManifest } from "../src/agent-surface.mjs";
 import { runSaduckSync, readSaduckManifest, SADUCK_NEVER_EXPOSED } from "../src/saduck.mjs";
 import { createApiServer } from "../src/server.mjs";
 
 const SYNTHETIC_TOKEN = "synthetic-token-for-test-1234567890";
+
+test("saduck.sync capability describes HTTP failure responses", () => {
+  const capability = buildAgentManifest({ baseUrl: "https://example.invalid", version: "test" })
+    .capabilities.find((entry) => entry.id === "saduck.sync");
+
+  assert.ok(capability);
+  assert.match(capability.returns, /HTTP 409/);
+  assert.match(capability.returns, /\{ ok: false, error \}/);
+});
 
 function createFakeWeb(routes = {}, calls = []) {
   return {
