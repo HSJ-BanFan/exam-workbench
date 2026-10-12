@@ -6,6 +6,8 @@ import path from "node:path";
 import { runSaduckSync, readSaduckManifest, SADUCK_NEVER_EXPOSED } from "../src/saduck.mjs";
 import { createApiServer } from "../src/server.mjs";
 
+const SYNTHETIC_TOKEN = "synthetic-token-for-test-1234567890";
+
 function createFakeWeb(routes = {}, calls = []) {
   return {
     isDestroyed() {
@@ -16,7 +18,7 @@ function createFakeWeb(routes = {}, calls = []) {
     },
     async executeJavaScript(script) {
       if (typeof script === "string" && script.trim() === 'localStorage.getItem("token")') {
-        return "synthetic-token-for-test-1234567890";
+        return SYNTHETIC_TOKEN;
       }
       for (const [routePath, handler] of Object.entries(routes)) {
         if (typeof script === "string" && script.includes(`/api${routePath}`)) {
@@ -41,6 +43,13 @@ function cleanTempDir(dir) {
   if (dir && fs.existsSync(dir)) {
     fs.rmSync(dir, { recursive: true, force: true });
   }
+}
+
+function readOutputFiles(dir) {
+  return fs.readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
+    const file = path.join(dir, entry.name);
+    return entry.isDirectory() ? readOutputFiles(file) : [fs.readFileSync(file, "utf8")];
+  });
 }
 
 test("complete: all selected datasets succeed", async () => {
@@ -187,6 +196,32 @@ test("empty selection: empty dataset list returns ok:true with warning", async (
     const manifest = readSaduckManifest(outDir);
     assert.ok(manifest);
     assert.deepEqual(manifest.datasets, []);
+  } finally {
+    cleanTempDir(outDir);
+  }
+});
+
+test("unknown dataset IDs: preserve existing output and stop before session verification", async () => {
+  const outDir = makeTempDir();
+  try {
+    const manifestPath = path.join(outDir, "manifest.json");
+    const before = '{"previous":"keep"}\n';
+    fs.writeFileSync(manifestPath, before, "utf8");
+    const calls = [];
+    const fakeWeb = createFakeWeb({
+      "/user/verify": { code: 0, result: { email: "synthetic-user@example.invalid" } },
+    }, calls);
+
+    await assert.rejects(runSaduckSync({
+      web: fakeWeb,
+      outDir,
+      datasets: ["unknown-synthetic-id"],
+      log: () => {},
+    }), /unknown-synthetic-id/);
+
+    assert.deepEqual(calls, []);
+    assert.equal(fs.readFileSync(manifestPath, "utf8"), before);
+    assert.deepEqual(fs.readdirSync(outDir).sort(), ["manifest.json"]);
   } finally {
     cleanTempDir(outDir);
   }
@@ -369,7 +404,7 @@ test("manifest states and files: on-disk manifest integrity", async () => {
   const outDir = makeTempDir();
   try {
     const fakeWeb = createFakeWeb({
-      "/user/verify": { code: 0, result: { email: "student@example.com", vipType: null, vipEndTime: null } },
+      "/user/verify": { code: 0, result: { email: "synthetic-person@example.invalid", token: SYNTHETIC_TOKEN, vipType: null, vipEndTime: null } },
       "/myTime/list": { code: 0, result: [{ duration: 50 }] },
       "/plan/list": { code: 503, message: "synthetic plan error" },
     });
@@ -385,7 +420,7 @@ test("manifest states and files: on-disk manifest integrity", async () => {
     assert.ok(manifest);
     assert.equal(manifest.app, "exam-workbench");
     assert.equal(manifest.schema, 1);
-    assert.equal(manifest.account.emailMasked, "st***@example.com");
+    assert.equal(manifest.account.emailMasked, "sy***@example.invalid");
     assert.equal(manifest.datasets.length, 2);
     const timeEntry = manifest.datasets.find((d) => d.id === "time");
     assert.equal(timeEntry.state, "ok");
@@ -398,6 +433,9 @@ test("manifest states and files: on-disk manifest integrity", async () => {
     assert.ok(manifest.files.includes("状态/同步状态.md"));
     assert.ok(manifest.files.includes("计时记录/time.json"));
     assert.deepEqual(manifest.neverExposed, SADUCK_NEVER_EXPOSED);
+    const output = readOutputFiles(outDir).join("\n");
+    assert.equal(output.includes(SYNTHETIC_TOKEN), false);
+    assert.equal(output.includes("synthetic-person@example.invalid"), false);
   } finally {
     cleanTempDir(outDir);
   }
