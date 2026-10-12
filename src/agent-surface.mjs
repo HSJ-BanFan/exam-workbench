@@ -381,7 +381,7 @@ export const CAPABILITIES = [
         datasets: { type: "array", items: { type: "string" }, description: "数据集 id 列表；省略时用默认 7 项" },
       },
     },
-    returns: "{ ok, outDir, datasets: { id: { title, items, status } } }。",
+    returns: "HTTP 200 返回 { ok: true, outDir, datasets: { id: { title, items, status } } }。HTTP 409 返回 { ok: false, error }。已运行同步时还包含 outDir、datasets 和 manifest。",
     skill: "saduck-data",
   }),
   cap({

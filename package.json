@@ -19,6 +19,7 @@
   "scripts": {
     "start": "electron .",
     "selftest": "electron . --self-test",
+    "test": "node --test test/saduck-sync.test.mjs",
     "pack": "electron-packager . exam-workbench --platform=win32 --arch=x64 --out=dist --overwrite --prune=true --ignore=dist --ignore=.selftest"
   },
   "engines": {

@@ -84,6 +84,32 @@
 | `GET /api/naoku/for-question?qid=` | 按粉笔题号取「真题 → 考点/材料/相关题」 |
 | `GET /api/naoku/points?模块=&大类=&limit=` | 考点列表（含母题摘要），供考点级复习 |
 
+### SaDuck 同步结果
+
+`POST /api/saduck/sync[?datasets=time,plan]` 同步所选的本人数据。所有数据集均成功或仅有会员限制时返回 HTTP 200。任一数据集状态为 `error` 时返回 HTTP 409。
+
+未提供 `datasets` 时，应用使用已配置的默认选择。请求体中的 `{"datasets": []}` 或查询参数 `?datasets=` 表示不选数据集。查询参数存在时优先于请求体。
+
+SaDuck 页面可用且会话校验通过时，空选择会写入空 manifest 和警告，不调用数据集接口，并返回 HTTP 200。页面不可用或会话校验失败时仍会返回错误状态。
+
+未知数据集 ID 会返回 HTTP 409 和 `ok: false` 错误；IPC 同步返回同样的失败摘要。请求会在等待 SaDuck 页面、校验会话或写入输出之前被拒绝，因此已有 manifest 和文件保持不变。
+
+数据集同步完成但有数据集失败时，响应保留顶层 `ok: false` 和 `error`，并返回 `datasets` 与 `manifest` 路径。页面不可用、会话校验失败或已有同步任务运行时，错误响应不包含这两项。`datasets[id].status` 分别为 `ok`、`vip` 或 `error`。读取 `datasets[id].message` 可查看对应数据集的详细原因。
+
+其他成功数据集及其文件不会因同批次的失败而撤销，manifest 会记录本次各数据集状态。
+
+```json
+{
+  "ok": false,
+  "error": "部分数据集同步失败：每日打卡（plan）",
+  "datasets": {
+    "time": { "title": "计时记录", "items": 1, "status": "ok", "message": "", "files": ["计时记录/计时记录.md", "计时记录/time.json"] },
+    "plan": { "title": "每日打卡", "items": 0, "status": "error", "message": "503 synthetic failure", "files": [] }
+  },
+  "manifest": "<configured SaDuck output directory>/manifest.json"
+}
+```
+
 ## 7. 脑库索引接口（`/api/naoku/*`）
 
 数据来源是第三方 Obsidian vault「[考公脑库](https://github.com/ERRRC/kaogongzhentizhengliu)」，只覆盖

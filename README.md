@@ -91,6 +91,7 @@ SaDuck 的输出写在同一层级的 `SaDuck同步/` 目录（结构一致：�
   计时记录 / 每日打卡 / 生词锦囊 / 晨读收藏 / 申论练习记录 / 错题列表 / 行测练习记录；
   词语辨析练习组属站点内容，默认不同步；
 - 「设置」中可修改 SaDuck 输出目录；token 不进入输出目录（只存在应用会话与引导文件）。
+- 任一已选数据集失败时，同步结果会标为失败。其他成功数据集会保留，manifest 会记录各项状态。会员限制仍单独显示，不计为同步失败。
 
 已在本地实测（2026-10-10）：开发版与打包版 `--self-test` 均 PASS；`scripts/api-test.mjs` 全绿（含 SaDuck 断言）；
 输出目录通过考公库 `vault check`（0 错误 0 警告）。
@@ -217,7 +218,10 @@ Claude Code（项目根 `.mcp.json`）：
 
 ## 开发与验证
 
+运行 `npm test` 可执行使用合成数据的离线回归测试。
+
 ```powershell
+npm test
 npm start                       # 开发运行
 npm run pack                    # 打包
 node scripts/dev-sync-test.mjs  # 不用 UI 直接跑同步引擎（SESSION_PATH 指向会话文件）
@@ -232,9 +236,9 @@ npx electron . --naoku-import   # 无窗口导入脑库副本并重建索引
 
 仓库自带 [`.github/workflows/build.yml`](.github/workflows/build.yml)，在 windows runner 上自动构建便携版：
 
-- **PR / push**：每次提交自动构建并上传构建产物（Actions 运行页可下载 zip）
-- **合并到 main**：自动更新预发布 [`main-latest`](https://github.com/HSJ-BanFan/exam-workbench/releases/tag/main-latest)，始终可下载最新的开发版
-- **推送 `v*` 标签**：发布正式 Release 并附带 zip（要求标签与 `package.json` 的 `version` 一致）
+- 测试通过且打包完成后，工作流会上传按提交 SHA 命名的 zip。PR 和分支手动运行可在 Actions 运行页下载产物，且不会发布 Release
+- **推送到 `main`**：更新预发布 [`main-latest`](https://github.com/HSJ-BanFan/exam-workbench/releases/tag/main-latest)
+- **推送 `v*` 标签或在 `v*` 标签上手动运行**：发布正式 Release 并附带 zip；标签必须与 `package.json` 的 `version` 一致
 
 发正式版：改 `package.json` 的 `version` → 合并到 main → `git tag vX.Y.Z && git push origin vX.Y.Z`。
 
