@@ -1,7 +1,9 @@
 import fs from "node:fs";
+import path from "node:path";
 
 const PRIVATE_BASENAMES = new Set(["config.json", "session.json", "saduck-session.json"]);
 const PACK_IGNORED_ROOTS = new Set([".git", "node_modules", "dist", ".selftest"]);
+const PACK_GENERATED_FILES = new Set(["node_modules/.package-lock.json"]);
 const REQUIRED_PACK_IGNORES = [
   "config\\.json$",
   "session\\.json$",
@@ -16,6 +18,13 @@ export function isPrivatePackagePath(value) {
 
 export function findPrivatePackagePaths(values) {
   return values.map(String).filter(isPrivatePackagePath);
+}
+
+export function assertPackageOutputAbsent(root) {
+  const outputDir = path.join(root, "dist", "exam-workbench-win32-x64");
+  if (fs.existsSync(outputDir)) {
+    throw new Error("package output already exists; refusing to overwrite: " + outputDir);
+  }
 }
 
 function normalizePackagePath(value) {
@@ -50,7 +59,7 @@ export function findUntrackedPackagedPaths(values, trackedValues, productionPack
     .filter((value) => {
       const normalized = value.toLowerCase();
       const productionDependency = allowedPackages.some((prefix) => normalized.startsWith(prefix));
-      return value && !tracked.has(normalized) && !productionDependency;
+      return value && !tracked.has(normalized) && !productionDependency && !PACK_GENERATED_FILES.has(normalized);
     });
 }
 

@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { createRequire } from "node:module";
+import { execFileSync } from "node:child_process";
 import {
   findMissingPackIgnores,
   findPrivatePackagePaths,
@@ -32,9 +33,15 @@ if (uncoveredInputs.length) {
 const archivePath = path.join(packageDir, "resources", "app.asar");
 if (!fs.existsSync(archivePath)) throw new Error(`app.asar missing: ${archivePath}`);
 const require = createRequire(path.resolve("package.json"));
-const { listPackage } = require("@electron/asar");
+const { getRawHeader } = require("@electron/asar");
 const externalFiles = listFiles(packageDir).map((value) => value.replaceAll("\\", "/"));
-const appFiles = listPackage(archivePath).map((value) => String(value).replaceAll("\\", "/"));
+function listAsarFiles(directory, prefix = "") {
+  return Object.entries(directory.files ?? {}).flatMap(([name, entry]) => {
+    const value = prefix ? prefix + "/" + name : name;
+    return entry.files ? listAsarFiles(entry, value) : [value];
+  });
+}
+const appFiles = listAsarFiles(getRawHeader(archivePath).header);
 const trackedFiles = execFileSync("git", ["ls-files", "-z"], { cwd: root, encoding: "utf8" }).split("\0").filter(Boolean);
 const productionPackageRoots = listProductionPackageRoots(packageLock);
 const violations = findPrivatePackagePaths([...externalFiles, ...appFiles]);

@@ -1,8 +1,9 @@
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
-import { findMissingPackIgnores, findUncoveredPackInputs } from "./package-privacy.mjs";
+import { assertPackageOutputAbsent, findMissingPackIgnores, findUncoveredPackInputs } from "./package-privacy.mjs";
 
 const root = execFileSync("git", ["rev-parse", "--show-toplevel"], { encoding: "utf8" }).trim();
+assertPackageOutputAbsent(root);
 const packageJson = JSON.parse(fs.readFileSync(`${root}/package.json`, "utf8"));
 const missingIgnores = findMissingPackIgnores(packageJson.scripts?.pack ?? "");
 if (missingIgnores.length) throw new Error(`pack command is missing private-file ignores: ${missingIgnores.join(", ")}`);

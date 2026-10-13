@@ -212,6 +212,46 @@ test("vault refresh refuses assume-unchanged edits under the sparse image direct
   }
 });
 
+test("vault refresh refuses modified skip-worktree files under the sparse image directory", async (t) => {
+  const root = tempRoot(t);
+  const restoreEnvironment = isolateGitEnvironment(root);
+  try {
+    const { upstream, seed } = createRemote(root);
+    const vault = path.join(root, "vault");
+    git(["clone", "--depth", "1", "--filter=blob:none", pathToFileURL(upstream).href, vault]);
+    const relPath = "90-图片/Synthetic.md";
+    const image = path.join(vault, relPath);
+    const headBefore = git(["rev-parse", "HEAD"], vault);
+    const upstreamBefore = git(["rev-parse", "@{upstream}"], vault);
+    const localContent = "# Synthetic local sparse image edit\n";
+    git(["update-index", "--skip-worktree", "--", relPath], vault);
+    assert.match(git(["ls-files", "-v", "--", relPath], vault), /^S /);
+    fs.mkdirSync(path.dirname(image), { recursive: true });
+    fs.writeFileSync(image, localContent, "utf8");
+    assert.match(git(["ls-files", "-v", "--", relPath], vault), /^S /);
+    assert.equal(git(["status", "--porcelain", "--untracked-files=all"], vault), "");
+
+    fs.writeFileSync(path.join(seed, relPath), "# Synthetic upstream image update\n", "utf8");
+    git(["add", "."], seed);
+    git(["commit", "-m", "update synthetic sparse image"], seed);
+    git(["push", "origin", "main"], seed);
+
+    let failure;
+    try {
+      await importVault({ dir: vault, repo: pathToFileURL(upstream).href });
+    } catch (error) {
+      failure = error;
+    }
+
+    assert.match(String(failure?.message ?? ""), /索引标记/);
+    assert.equal(fs.readFileSync(image, "utf8"), localContent);
+    assert.equal(git(["rev-parse", "HEAD"], vault), headBefore);
+    assert.equal(git(["rev-parse", "@{upstream}"], vault), upstreamBefore);
+  } finally {
+    restoreEnvironment();
+  }
+});
+
 test("vault refresh rejects local commits that differ from the tracked upstream", async (t) => {
   const root = tempRoot(t);
   const restoreEnvironment = isolateGitEnvironment(root);
@@ -283,6 +323,43 @@ test("clean shallow vault behind an already-fetched upstream still refreshes", a
     assert.equal(failure, undefined, `clean behind-upstream refresh failed: ${failure?.message ?? "unknown error"}`);
     assert.equal(result.commit, trackingHead);
     assert.equal(fs.readFileSync(path.join(vault, "20-考点", "Synthetic.md"), "utf8"), "# Synthetic upstream v3\n");
+  } finally {
+    restoreEnvironment();
+  }
+});
+
+test("refresh follows the configured upstream when origin has a custom fetch refspec", async (t) => {
+  const root = tempRoot(t);
+  const restoreEnvironment = isolateGitEnvironment(root);
+  try {
+    const { upstream, seed } = createRemote(root);
+    const vault = path.join(root, "vault");
+    cloneVault(upstream, vault);
+    const note = path.join(seed, "20-考点", "Synthetic.md");
+
+    git(["checkout", "-b", "feature"], seed);
+    fs.writeFileSync(note, "# Synthetic feature branch\n", "utf8");
+    git(["add", "."], seed);
+    git(["commit", "-m", "advance synthetic feature"], seed);
+    git(["push", "--set-upstream", "origin", "feature"], seed);
+    const featureHead = git(["rev-parse", "HEAD"], seed);
+
+    git(["checkout", "main"], seed);
+    fs.writeFileSync(note, "# Synthetic main branch v2\n", "utf8");
+    git(["add", "."], seed);
+    git(["commit", "-m", "advance synthetic main"], seed);
+    git(["push", "origin", "main"], seed);
+    const mainHead = git(["rev-parse", "HEAD"], seed);
+    git(["config", "--unset-all", "remote.origin.fetch"], vault);
+    git(["config", "--add", "remote.origin.fetch", "+refs/heads/main:refs/remotes/origin/main"], vault);
+    git(["config", "--add", "remote.origin.fetch", "+refs/heads/feature:refs/remotes/origin/feature"], vault);
+
+    const result = await importVault({ dir: vault, repo: pathToFileURL(upstream).href });
+
+    assert.equal(result.commit, mainHead);
+    assert.notEqual(result.commit, featureHead);
+    assert.equal(git(["rev-parse", "@{upstream}"], vault), mainHead);
+    assert.equal(fs.readFileSync(path.join(vault, "20-考点", "Synthetic.md"), "utf8"), "# Synthetic main branch v2\n");
   } finally {
     restoreEnvironment();
   }

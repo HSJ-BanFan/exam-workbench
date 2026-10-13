@@ -1,7 +1,13 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
+import { createRequire } from "node:module";
 import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 import {
+  assertPackageOutputAbsent,
   findMissingPackIgnores,
   findPrivatePackagePaths,
   findUncoveredPackInputs,
@@ -11,10 +17,26 @@ import {
 } from "../scripts/package-privacy.mjs";
 
 const packageJson = JSON.parse(fs.readFileSync(new URL("../package.json", import.meta.url), "utf8"));
+const require = createRequire(new URL("../package.json", import.meta.url));
+const { createPackage } = require("@electron/asar");
 
 test("pack command explicitly ignores local config, session, and local JSON files", () => {
   assert.deepEqual(findMissingPackIgnores(packageJson.scripts.pack), []);
   assert.match(packageJson.scripts.pack, /node scripts\/check-package-inputs\.mjs/);
+  assert.doesNotMatch(packageJson.scripts.pack, /--overwrite(?:\s|$)/);
+});
+
+test("package preflight refuses an existing output without changing its contents", (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "exam-workbench-package-output-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  assert.doesNotThrow(() => assertPackageOutputAbsent(root));
+
+  const outputDir = path.join(root, "dist", "exam-workbench-win32-x64");
+  fs.mkdirSync(outputDir, { recursive: true });
+  const sentinel = path.join(outputDir, "synthetic-sentinel.txt");
+  fs.writeFileSync(sentinel, "synthetic data\n", "utf8");
+  assert.throws(() => assertPackageOutputAbsent(root), /refusing to overwrite/);
+  assert.equal(fs.readFileSync(sentinel, "utf8"), "synthetic data\n");
 });
 
 test("package audit rejects private basenames at any depth", () => {
@@ -57,6 +79,7 @@ test("packaged source audit detects paths missing from the checked-in tree", () 
     "考公脑库/20-考点/Synthetic.md",
     "node_modules/runtime/index.js",
     "node_modules/unlisted/index.js",
+    "node_modules/.package-lock.json",
   ], ["src/main.mjs"], ["node_modules/runtime"]), [
     "data/history.json",
     "考公脑库/20-考点/Synthetic.md",
@@ -74,4 +97,55 @@ test("production package roots exclude development-only dependencies", () => {
       "node_modules/dev-optional-tool": { dev: true, optional: true, devOptional: true },
     },
   }), ["node_modules/runtime", "node_modules/optional-runtime"]);
+});
+
+test("package privacy verifier inspects a synthetic app.asar", async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "exam-workbench-package-verifier-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const appDir = path.join(root, "app");
+  const packageDir = path.join(root, "package");
+  fs.mkdirSync(path.join(appDir, "src"), { recursive: true });
+  fs.mkdirSync(path.join(packageDir, "resources"), { recursive: true });
+  fs.writeFileSync(path.join(appDir, "package.json"), "{}\n");
+  fs.writeFileSync(path.join(appDir, "src", "main.mjs"), "export {};\n");
+  await createPackage(appDir, path.join(packageDir, "resources", "app.asar"));
+
+  const verifier = fileURLToPath(new URL("../scripts/verify-package-privacy.mjs", import.meta.url));
+  const result = spawnSync(process.execPath, [verifier, packageDir], {
+    cwd: fileURLToPath(new URL("../", import.meta.url)),
+    encoding: "utf8",
+  });
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /"status": "passed"/);
+});
+
+test("package privacy verifier rejects private and untracked files in app.asar", async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "exam-workbench-package-verifier-negative-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const verifier = fileURLToPath(new URL("../scripts/verify-package-privacy.mjs", import.meta.url));
+  const checkout = fileURLToPath(new URL("../", import.meta.url));
+
+  for (const scenario of [
+    { name: "study-data", entries: { "data/history.json": "{\"synthetic\":true}\n" }, expected: /not tracked by this checkout/ },
+    { name: "credential", entries: { "nested/session.json": "{\"synthetic\":true}\n" }, expected: /private local files found in package/ },
+  ]) {
+    const appDir = path.join(root, scenario.name + "-app");
+    const packageDir = path.join(root, scenario.name + "-package");
+    fs.mkdirSync(path.join(packageDir, "resources"), { recursive: true });
+    fs.mkdirSync(path.join(appDir, "src"), { recursive: true });
+    fs.writeFileSync(path.join(appDir, "package.json"), "{}\n");
+    fs.writeFileSync(path.join(appDir, "src", "main.mjs"), "export {};\n");
+    for (const [relativePath, contents] of Object.entries(scenario.entries)) {
+      const filePath = path.join(appDir, ...relativePath.split("/"));
+      fs.mkdirSync(path.dirname(filePath), { recursive: true });
+      fs.writeFileSync(filePath, contents);
+    }
+    await createPackage(appDir, path.join(packageDir, "resources", "app.asar"));
+    const result = spawnSync(process.execPath, [verifier, packageDir], {
+      cwd: checkout,
+      encoding: "utf8",
+    });
+    assert.notEqual(result.status, 0, scenario.name + " must fail privacy verification");
+    assert.match(result.stderr, scenario.expected);
+  }
 });

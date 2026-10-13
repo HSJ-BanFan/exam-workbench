@@ -42,9 +42,19 @@ function isClone(dir) {
 
 function rejectHiddenIndexChanges({ cwd }) {
   const entries = git(["ls-files", "-v", "-z"], { cwd }).split("\0").filter(Boolean);
-  const flagged = entries
+  const parsed = entries
     .map((entry) => ({ tag: entry[0], filePath: entry.slice(2).replace(/\\/g, "/") }))
-    .filter(({ tag, filePath }) => tag !== "H" && !(tag === "S" && filePath.toLowerCase().startsWith("90-图片/")));
+  const flagged = parsed.filter(({ tag, filePath }) =>
+    tag !== "H" && !(tag === "S" && filePath.toLowerCase().startsWith("90-图片/"))
+  );
+  const modifiedSparseFiles = parsed.filter(({ tag, filePath }) => {
+    if (tag !== "S" || !filePath.toLowerCase().startsWith("90-图片/")) return false;
+    if (!fs.existsSync(path.join(cwd, filePath))) return false;
+    const indexedBlob = git(["rev-parse", ":" + filePath], { cwd });
+    const workingBlob = git(["hash-object", "--path=" + filePath, "--", filePath], { cwd });
+    return indexedBlob !== workingBlob;
+  });
+  flagged.push(...modifiedSparseFiles);
   if (flagged.length) {
     const paths = [...new Set(flagged.map(({ filePath }) => filePath))].slice(0, 3).join("、");
     throw new Error(`脑库副本存在可能隐藏本地改动的索引标记（${paths}），为保护本地内容已取消更新。请先检查这些文件的 Git 索引状态后重试。`);
@@ -122,21 +132,24 @@ export async function importVault({ dir, repo = DEFAULT_REPO, log = logNothing }
     }
     const head = git(["rev-parse", "HEAD"], { cwd: target });
     const upstream = git(["rev-parse", "@{upstream}"], { cwd: target, allowFail: true });
-    if (!upstream) {
+    const upstreamRef = git(["rev-parse", "--symbolic-full-name", "@{upstream}"], { cwd: target, allowFail: true });
+    if (!upstream || !upstreamRef?.startsWith("refs/remotes/origin/")) {
       throw new Error("脑库副本没有可用的跟踪远端，为保护本地提交已取消更新。请先检查该副本后重试。");
     }
+    const upstreamBranch = upstreamRef.slice("refs/remotes/origin/".length);
+    const fetchRefspec = "+refs/heads/" + upstreamBranch + ":" + upstreamRef;
     const currentBase = git(["merge-base", head, upstream], { cwd: target, allowFail: true });
     if (head !== upstream && currentBase !== null && currentBase !== head) {
       throw new Error("脑库副本当前版本包含未推送的本地提交或与跟踪远端分叉，为保护本地提交已取消更新。请先备份或检查该副本后重试。");
     }
     log("脑库副本已存在，拉取远端最新并重放 sparse 规则…");
-    git(["fetch", "--depth", "1", "origin"], { cwd: target });
+    git(["fetch", "--depth", "1", "origin", fetchRefspec], { cwd: target });
     let fetched = git(["rev-parse", "FETCH_HEAD"], { cwd: target });
     let refreshedBase = git(["merge-base", head, fetched], { cwd: target, allowFail: true });
     const isShallow = git(["rev-parse", "--is-shallow-repository"], { cwd: target }) === "true";
     let historyCount = Number(git(["rev-list", "--count", fetched], { cwd: target }));
     for (let depth = 1; isShallow && head !== fetched && refreshedBase !== head; depth *= 4) {
-      git(["fetch", `--deepen=${depth}`, "origin"], { cwd: target });
+      git(["fetch", "--deepen=" + depth, "origin", fetchRefspec], { cwd: target });
       fetched = git(["rev-parse", "FETCH_HEAD"], { cwd: target });
       refreshedBase = git(["merge-base", head, fetched], { cwd: target, allowFail: true });
       if (refreshedBase === head) break;
