@@ -219,7 +219,7 @@ Claude Code（项目根 `.mcp.json`）：
 
 ## 开发与验证
 
-本地打包会检查源码目录里的未跟踪文件和已暂存新增文件，防止把练习数据或脑库副本一起装入程序；本地配置、会话和明确排除的构建目录不影响打包。为保护已有文件，打包不会覆盖 dist/exam-workbench-win32-x64；目标目录已存在时会停止，请先手动备份或移走旧目录。
+本地打包会检查源码目录里的未跟踪文件和已暂存新增文件，防止把练习数据或脑库副本一起装入程序；app.asar 内的未跟踪依赖文件只按锁文件指定的生产依赖包实际文件清单放行，不会整目录豁免。本地配置、会话和明确排除的构建目录不影响打包。为保护已有文件，打包不会覆盖 dist/exam-workbench-win32-x64；目标目录已存在时会停止，请先手动备份或移走旧目录。
 
 ```powershell
 npm start                       # 开发运行
@@ -237,7 +237,7 @@ npx electron . --naoku-import   # 无窗口导入脑库副本并重建索引
 
 仓库自带 [`.github/workflows/build.yml`](.github/workflows/build.yml)，在 windows runner 上自动构建便携版：
 
-- **PR / push**：每次提交自动构建并上传构建产物（Actions 运行页可下载 zip）
+- **PR / push**：每次提交自动构建并上传 Windows 便携 ZIP、SHA-256 和构建说明；Actions artifact 名称含版本与短 SHA
 - **合并到 main**：自动更新预发布 [`main-latest`](https://github.com/HSJ-BanFan/exam-workbench/releases/tag/main-latest)，始终可下载最新的开发版
 - **推送 `v*` 标签**：发布正式 Release 并附带 zip（要求标签与 `package.json` 的 `version` 一致）
 

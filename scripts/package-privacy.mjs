@@ -49,16 +49,35 @@ export function listProductionPackageRoots(packageLock) {
     .map(([packagePath]) => packagePath);
 }
 
-export function findUntrackedPackagedPaths(values, trackedValues, productionPackageRoots = []) {
+export function listProductionPackageFiles(root, packageLock) {
+  const files = new Set();
+  const absoluteRoot = path.resolve(root);
+  for (const packageRoot of listProductionPackageRoots(packageLock)) {
+    const segments = packageRoot.split("/");
+    if (!packageRoot.startsWith("node_modules/") || segments.some((part) => !part || part === "." || part === "..")) {
+      throw new Error(`invalid production package path in lockfile: ${packageRoot}`);
+    }
+    const packageDirectory = path.resolve(absoluteRoot, ...segments);
+    const relative = path.relative(absoluteRoot, packageDirectory);
+    if (relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+      throw new Error(`production package path escapes the project root: ${packageRoot}`);
+    }
+    if (!fs.existsSync(packageDirectory) || !fs.statSync(packageDirectory).isDirectory()) continue;
+    for (const file of listFiles(root, packageRoot)) files.add(normalizePackagePath(file));
+  }
+  return [...files];
+}
+
+export function findUntrackedPackagedPaths(values, trackedValues, productionPackageFiles = []) {
   const tracked = new Set(trackedValues.map(normalizePackagePath).map((value) => value.toLowerCase()));
-  const allowedPackages = productionPackageRoots
+  const allowedDependencyFiles = new Set(productionPackageFiles
     .map(normalizePackagePath)
-    .map((value) => `${value.toLowerCase()}/`);
+    .map((value) => value.toLowerCase()));
   return values
     .map(normalizePackagePath)
     .filter((value) => {
       const normalized = value.toLowerCase();
-      const productionDependency = allowedPackages.some((prefix) => normalized.startsWith(prefix));
+      const productionDependency = allowedDependencyFiles.has(normalized);
       return value && !tracked.has(normalized) && !productionDependency && !PACK_GENERATED_FILES.has(normalized);
     });
 }

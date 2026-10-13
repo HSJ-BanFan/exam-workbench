@@ -17,6 +17,7 @@ jobs:
     timeout-minutes: 30
     outputs:
       release_tag: ${{ steps.validate_release_tag.outputs.release_tag }}
+      artifact_name: ${{ steps.zip.outputs.artifact_name }}
     permissions:
       contents: read
     steps:
@@ -53,15 +54,46 @@ jobs:
       - name: Package and verify private-file exclusions (win32-x64 portable)
         run: npm run pack
 
-      - name: Zip
+      - name: Zip and write build metadata
+        id: zip
         shell: pwsh
-        run: Compress-Archive -Path dist/exam-workbench-win32-x64 -DestinationPath dist/exam-workbench-win32-x64.zip
+        env:
+          BUILD_NOTE: ${{ github.event.pull_request.title }}
+        run: |
+          $version = (Get-Content package.json -Raw | ConvertFrom-Json).version
+          $fullSha = $env:GITHUB_SHA
+          $shortSha = $fullSha.Substring(0, 7)
+          $zipName = "exam-workbench-$version-$shortSha-win32-x64.zip"
+          $zipPath = Join-Path dist $zipName
+          Compress-Archive -Path dist/exam-workbench-win32-x64 -DestinationPath $zipPath -CompressionLevel Optimal
+          Copy-Item $zipPath dist/exam-workbench-win32-x64.zip
+          $hash = (Get-FileHash -LiteralPath $zipPath -Algorithm SHA256).Hash.ToLowerInvariant()
+          Set-Content -LiteralPath "${zipPath}.sha256" -Encoding ascii -Value "$hash  $zipName"
+          $note = $env:BUILD_NOTE -replace '[\r\n]+', ' '
+          if ([string]::IsNullOrWhiteSpace($note)) { $note = (git log -1 --format=%s) }
+          $buildNotes = @"
+          # Windows portable build
+
+          - Version: $version
+          - Commit: $fullSha
+          - SHA-256: $hash
+
+          ## Changes
+
+          $note
+          "@
+          Set-Content -LiteralPath (Join-Path dist 'BUILD-NOTES.md') -Encoding utf8 -Value $buildNotes
+          "artifact_name=exam-workbench-win32-x64-$version-$shortSha" >> $env:GITHUB_OUTPUT
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v7
         with:
-          name: exam-workbench-win32-x64-${{ github.sha }}
-          path: dist/exam-workbench-win32-x64.zip
+          name: ${{ steps.zip.outputs.artifact_name }}
+          path: |
+            dist/exam-workbench-win32-x64.zip
+            dist/exam-workbench-*-win32-x64.zip
+            dist/exam-workbench-*-win32-x64.zip.sha256
+            dist/BUILD-NOTES.md
           if-no-files-found: error
 
       - name: Check tag matches package.json version
@@ -84,7 +116,7 @@ jobs:
       - name: Download build artifact
         uses: actions/download-artifact@v7
         with:
-          name: exam-workbench-win32-x64-${{ github.sha }}
+          name: ${{ needs.build.outputs.artifact_name }}
           path: dist
 
       - name: Prepare release asset (v* tag)

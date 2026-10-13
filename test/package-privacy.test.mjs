@@ -12,6 +12,7 @@ import {
   findPrivatePackagePaths,
   findUncoveredPackInputs,
   findUntrackedPackagedPaths,
+  listProductionPackageFiles,
   listProductionPackageRoots,
   isPrivatePackagePath,
 } from "../scripts/package-privacy.mjs";
@@ -104,13 +105,51 @@ test("packaged source audit detects paths missing from the checked-in tree", () 
     "data/history.json",
     "考公脑库/20-考点/Synthetic.md",
     "node_modules/runtime/index.js",
+    "node_modules/runtime/injected-study-data.json",
     "node_modules/unlisted/index.js",
     "node_modules/.package-lock.json",
-  ], ["src/main.mjs"], ["node_modules/runtime"]), [
+  ], ["src/main.mjs"], ["node_modules/runtime/index.js"]), [
     "data/history.json",
     "考公脑库/20-考点/Synthetic.md",
+    "node_modules/runtime/injected-study-data.json",
     "node_modules/unlisted/index.js",
   ]);
+});
+
+test("production dependency allowlist contains installed files, not whole package directories", (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "exam-workbench-package-dependency-files-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  for (const relative of [
+    "node_modules/runtime/index.js",
+    "node_modules/runtime/nested/helper.js",
+    "node_modules/dev-tool/index.js",
+  ]) {
+    const file = path.join(root, ...relative.split("/"));
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, "// synthetic package file\n", "utf8");
+  }
+
+  const allowed = listProductionPackageFiles(root, {
+    packages: {
+      "node_modules/runtime": { version: "1.0.0" },
+      "node_modules/dev-tool": { version: "1.0.0", dev: true },
+    },
+  });
+  assert.deepEqual(allowed.sort(), [
+    "node_modules/runtime/index.js",
+    "node_modules/runtime/nested/helper.js",
+  ]);
+  assert.deepEqual(findUntrackedPackagedPaths([
+    "node_modules/runtime/index.js",
+    "node_modules/runtime/not-installed.js",
+    "node_modules/dev-tool/index.js",
+  ], [], allowed), [
+    "node_modules/runtime/not-installed.js",
+    "node_modules/dev-tool/index.js",
+  ]);
+  assert.throws(() => listProductionPackageFiles(root, {
+    packages: { "node_modules/../../outside": { version: "1.0.0" } },
+  }), /invalid production package path/);
 });
 
 test("production package roots exclude development-only dependencies", () => {
