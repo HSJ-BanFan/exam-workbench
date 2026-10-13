@@ -44,7 +44,7 @@ function rejectHiddenIndexChanges({ cwd }) {
   const entries = git(["ls-files", "-v", "-z"], { cwd }).split("\0").filter(Boolean);
   const flagged = entries
     .map((entry) => ({ tag: entry[0], filePath: entry.slice(2).replace(/\\/g, "/") }))
-    .filter(({ tag, filePath }) => tag !== "H" && !filePath.toLowerCase().startsWith("90-图片/"));
+    .filter(({ tag, filePath }) => tag !== "H" && !(tag === "S" && filePath.toLowerCase().startsWith("90-图片/")));
   if (flagged.length) {
     const paths = [...new Set(flagged.map(({ filePath }) => filePath))].slice(0, 3).join("、");
     throw new Error(`脑库副本存在可能隐藏本地改动的索引标记（${paths}），为保护本地内容已取消更新。请先检查这些文件的 Git 索引状态后重试。`);

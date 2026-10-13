@@ -173,6 +173,45 @@ test("vault refresh refuses modified files marked assume-unchanged", async (t) =
   }
 });
 
+test("vault refresh refuses assume-unchanged edits under the sparse image directory", async (t) => {
+  const root = tempRoot(t);
+  const restoreEnvironment = isolateGitEnvironment(root);
+  try {
+    const { upstream, seed } = createRemote(root);
+    const vault = path.join(root, "vault");
+    cloneVault(upstream, vault);
+    const relPath = "90-图片/Synthetic.md";
+    const image = path.join(vault, relPath);
+    const headBefore = git(["rev-parse", "HEAD"], vault);
+    const upstreamBefore = git(["rev-parse", "@{upstream}"], vault);
+    const localContent = "# Synthetic local image edit\n";
+    fs.mkdirSync(path.dirname(image), { recursive: true });
+    fs.writeFileSync(image, localContent, "utf8");
+    git(["update-index", "--no-skip-worktree", "--assume-unchanged", relPath], vault);
+    assert.match(git(["ls-files", "-v", "--", relPath], vault), /^h /);
+    assert.equal(git(["status", "--porcelain", "--untracked-files=all"], vault), "");
+
+    fs.writeFileSync(path.join(seed, relPath), "# Synthetic upstream image edit\n", "utf8");
+    git(["add", "."], seed);
+    git(["commit", "-m", "update synthetic image"], seed);
+    git(["push", "origin", "main"], seed);
+
+    let failure;
+    try {
+      await importVault({ dir: vault, repo: pathToFileURL(upstream).href });
+    } catch (error) {
+      failure = error;
+    }
+
+    assert.match(String(failure?.message ?? ""), /索引标记/);
+    assert.equal(fs.readFileSync(image, "utf8"), localContent);
+    assert.equal(git(["rev-parse", "HEAD"], vault), headBefore);
+    assert.equal(git(["rev-parse", "@{upstream}"], vault), upstreamBefore);
+  } finally {
+    restoreEnvironment();
+  }
+});
+
 test("vault refresh rejects local commits that differ from the tracked upstream", async (t) => {
   const root = tempRoot(t);
   const restoreEnvironment = isolateGitEnvironment(root);
@@ -244,6 +283,41 @@ test("clean shallow vault behind an already-fetched upstream still refreshes", a
     assert.equal(failure, undefined, `clean behind-upstream refresh failed: ${failure?.message ?? "unknown error"}`);
     assert.equal(result.commit, trackingHead);
     assert.equal(fs.readFileSync(path.join(vault, "20-考点", "Synthetic.md"), "utf8"), "# Synthetic upstream v3\n");
+  } finally {
+    restoreEnvironment();
+  }
+});
+
+test("refresh stops when the upstream has unrelated history", async (t) => {
+  const root = tempRoot(t);
+  const restoreEnvironment = isolateGitEnvironment(root);
+  try {
+    const { upstream, seed } = createRemote(root);
+    const vault = path.join(root, "vault");
+    cloneVault(upstream, vault);
+    const headBefore = git(["rev-parse", "HEAD"], vault);
+    const replacement = path.join(root, "replacement");
+    fs.mkdirSync(replacement);
+    git(["init", "--initial-branch=main"], replacement);
+    git(["config", "user.name", "Synthetic Test"], replacement);
+    git(["config", "user.email", "synthetic@example.invalid"], replacement);
+    const replacementNote = path.join(replacement, "Replacement.md");
+    fs.writeFileSync(replacementNote, "# Synthetic unrelated history\n", "utf8");
+    git(["add", "."], replacement);
+    git(["commit", "-m", "replace synthetic history"], replacement);
+    git(["remote", "add", "origin", pathToFileURL(upstream).href], replacement);
+    git(["push", "--force", "origin", "main"], replacement);
+
+    let failure;
+    try {
+      await importVault({ dir: vault, repo: pathToFileURL(upstream).href });
+    } catch (error) {
+      failure = error;
+    }
+
+    assert.match(String(failure?.message ?? ""), /不是快进关系/);
+    assert.equal(git(["rev-parse", "HEAD"], vault), headBefore);
+    assert.equal(fs.readFileSync(path.join(vault, "20-考点", "Synthetic.md"), "utf8"), "# Synthetic upstream v1\n");
   } finally {
     restoreEnvironment();
   }
