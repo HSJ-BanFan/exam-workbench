@@ -693,3 +693,156 @@ test("existing vault refuses refresh when origin has an additional fetch URL", a
     restoreEnvironment();
   }
 });
+
+test("refresh refuses to overwrite custom sparse rules", async (t) => {
+  const root = tempRoot(t);
+  const restoreEnvironment = isolateGitEnvironment(root);
+  try {
+    const { upstream, seed } = createRemote(root);
+    const vault = path.join(root, "vault");
+    cloneVault(upstream, vault);
+    git(["sparse-checkout", "set", "--no-cone", "/*"], vault);
+
+    const image = path.join(vault, "90-图片", "Synthetic.md");
+    const indexPath = path.join(vault, ".git", "index");
+    const sparsePath = path.join(vault, ".git", "info", "sparse-checkout");
+    const imageBefore = fs.readFileSync(image);
+    const indexBefore = fs.readFileSync(indexPath);
+    const sparseBefore = fs.readFileSync(sparsePath);
+    const headBefore = git(["rev-parse", "HEAD"], vault);
+    const upstreamBefore = git(["rev-parse", "@{upstream}"], vault);
+
+    fs.writeFileSync(path.join(seed, "20-考点", "Synthetic.md"), "# Synthetic upstream v2\n", "utf8");
+    git(["add", "."], seed);
+    git(["commit", "-m", "advance synthetic upstream"], seed);
+    git(["push", "origin", "main"], seed);
+
+    let failure;
+    try {
+      await importVault({ dir: vault, repo: pathToFileURL(upstream).href });
+    } catch (error) {
+      failure = error;
+    }
+
+    assert.match(String(failure?.message ?? ""), /稀疏检出规则/);
+    assert.equal(git(["rev-parse", "HEAD"], vault), headBefore);
+    assert.equal(git(["rev-parse", "@{upstream}"], vault), upstreamBefore);
+    assert.deepEqual(fs.readFileSync(indexPath), indexBefore);
+    assert.deepEqual(fs.readFileSync(sparsePath), sparseBefore);
+    assert.deepEqual(fs.readFileSync(image), imageBefore);
+    assert.equal(git(["for-each-ref", "--format=%(refname)", "refs/exam-workbench/naoku-refresh"], vault), "");
+  } finally {
+    restoreEnvironment();
+  }
+});
+
+test("concurrent upstream ref updates are rejected before resetting the vault", async (t) => {
+  const root = tempRoot(t);
+  const restoreEnvironment = isolateGitEnvironment(root);
+  try {
+    const { upstream, seed } = createRemote(root);
+    const vault = path.join(root, "vault");
+    cloneVault(upstream, vault);
+    const indexPath = path.join(vault, ".git", "index");
+    const sparsePath = path.join(vault, ".git", "info", "sparse-checkout");
+    const indexBefore = fs.readFileSync(indexPath);
+    const sparseBefore = fs.readFileSync(sparsePath);
+    const headBefore = git(["rev-parse", "HEAD"], vault);
+    const upstreamBefore = git(["rev-parse", "@{upstream}"], vault);
+    const upstreamRef = git(["rev-parse", "--symbolic-full-name", "@{upstream}"], vault);
+
+    fs.writeFileSync(path.join(seed, "20-考点", "Synthetic.md"), "# Synthetic upstream v2\n", "utf8");
+    git(["add", "."], seed);
+    git(["commit", "-m", "advance synthetic upstream"], seed);
+    git(["push", "origin", "main"], seed);
+    const concurrentHead = git(["rev-parse", "HEAD"], seed);
+    let racedRef = false;
+    let resetCalled = false;
+    const runGit = (args, options = {}) => {
+      if (args[0] === "reset" && args[1] === "--keep") resetCalled = true;
+      if (!racedRef && args[0] === "update-ref" && args[1] === upstreamRef && args[2] === concurrentHead && args[3] === upstreamBefore) {
+        racedRef = true;
+        git(["update-ref", upstreamRef, concurrentHead, upstreamBefore], options.cwd);
+      }
+      return git(args, options.cwd);
+    };
+
+    let failure;
+    let result;
+    try {
+      result = await importVault({ dir: vault, repo: pathToFileURL(upstream).href, runGit });
+    } catch (error) {
+      failure = error;
+    }
+
+    assert.ok(racedRef, `test must advance the tracking ref during the conditional update; failure=${failure?.message ?? "none"}; result=${JSON.stringify(result)}`);
+    assert.ok(failure, "the stale conditional ref update must fail");
+    assert.equal(result, undefined);
+    assert.equal(resetCalled, false, "HEAD and index must not reset after a concurrent ref change");
+    assert.equal(git(["rev-parse", "HEAD"], vault), headBefore);
+    assert.equal(git(["rev-parse", "@{upstream}"], vault), concurrentHead, "preserve the concurrent fetch result");
+    assert.deepEqual(fs.readFileSync(indexPath), indexBefore);
+    assert.deepEqual(fs.readFileSync(sparsePath), sparseBefore);
+    assert.equal(git(["status", "--porcelain", "--untracked-files=all"], vault), "");
+    assert.equal(git(["for-each-ref", "--format=%(refname)", "refs/exam-workbench/naoku-refresh"], vault), "");
+  } finally {
+    restoreEnvironment();
+  }
+});
+
+test("late ignored path conflicts roll back the refresh ref and preserve the sparse index", async (t) => {
+  const root = tempRoot(t);
+  const restoreEnvironment = isolateGitEnvironment(root);
+  try {
+    const { upstream, seed } = createRemote(root);
+    const vault = path.join(root, "vault");
+    cloneVault(upstream, vault);
+    const localOnly = path.join(vault, "20-考点", "Added.md");
+    const localContent = "# Synthetic ignored local file\n";
+    const excludePath = path.join(vault, ".git", "info", "exclude");
+    fs.appendFileSync(excludePath, "\n20-考点/Added.md\n", "utf8");
+    const indexPath = path.join(vault, ".git", "index");
+    const sparsePath = path.join(vault, ".git", "info", "sparse-checkout");
+    const indexBefore = fs.readFileSync(indexPath);
+    const sparseBefore = fs.readFileSync(sparsePath);
+    const headBefore = git(["rev-parse", "HEAD"], vault);
+    const upstreamBefore = git(["rev-parse", "@{upstream}"], vault);
+    const upstreamRef = git(["rev-parse", "--symbolic-full-name", "@{upstream}"], vault);
+
+    fs.writeFileSync(path.join(seed, "20-考点", "Added.md"), "# Synthetic upstream file\n", "utf8");
+    git(["add", "."], seed);
+    git(["commit", "-m", "add synthetic ignored-path collision"], seed);
+    git(["push", "origin", "main"], seed);
+    const fetchedHead = git(["rev-parse", "HEAD"], seed);
+    let injected = false;
+    const runGit = (args, options = {}) => {
+      const result = git(args, options.cwd);
+      if (!injected && args[0] === "update-ref" && args[1] === upstreamRef && args[2] === fetchedHead) {
+        injected = true;
+        fs.writeFileSync(localOnly, localContent, "utf8");
+      }
+      return result;
+    };
+
+    let failure;
+    let result;
+    try {
+      result = await importVault({ dir: vault, repo: pathToFileURL(upstream).href, runGit });
+    } catch (error) {
+      failure = error;
+    }
+
+    assert.ok(injected, `test must add the ignored file after the first conflict check; failure=${failure?.message ?? "none"}; result=${JSON.stringify(result)}`);
+    assert.match(String(failure?.message ?? ""), /被忽略本地文件与远端路径冲突/);
+    assert.equal(result, undefined);
+    assert.equal(fs.readFileSync(localOnly, "utf8"), localContent);
+    assert.equal(git(["rev-parse", "HEAD"], vault), headBefore);
+    assert.equal(git(["rev-parse", "@{upstream}"], vault), upstreamBefore, "roll back the ref advanced for the failed refresh");
+    assert.deepEqual(fs.readFileSync(indexPath), indexBefore);
+    assert.deepEqual(fs.readFileSync(sparsePath), sparseBefore);
+    assert.equal(git(["status", "--porcelain", "--untracked-files=all"], vault), "");
+    assert.equal(git(["for-each-ref", "--format=%(refname)", "refs/exam-workbench/naoku-refresh"], vault), "");
+  } finally {
+    restoreEnvironment();
+  }
+});

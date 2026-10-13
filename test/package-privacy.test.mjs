@@ -73,6 +73,37 @@ test("package preflight rejects staged study data that git no longer lists as un
   assert.match(result.stderr, /data\/history\.json/);
 });
 
+test("package preflight rejects modified tracked files even when index flags hide them", (t) => {
+  for (const flag of ["visible", "assume-unchanged", "skip-worktree"]) {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "exam-workbench-package-tracked-input-"));
+    t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+    const scriptsDir = path.join(root, "scripts");
+    const sourceDir = path.join(root, "src");
+    fs.mkdirSync(scriptsDir, { recursive: true });
+    fs.mkdirSync(sourceDir, { recursive: true });
+    for (const name of ["check-package-inputs.mjs", "package-privacy.mjs"]) {
+      fs.copyFileSync(new URL("../scripts/" + name, import.meta.url), path.join(scriptsDir, name));
+    }
+    fs.writeFileSync(path.join(root, "package.json"), JSON.stringify(packageJson, null, 2) + "\n", "utf8");
+    const sourcePath = path.join(sourceDir, "app.mjs");
+    fs.writeFileSync(sourcePath, "export const fixture = 'clean';\n", "utf8");
+    const git = (args) => execFileSync("git", args, { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
+    git(["init", "--initial-branch=main"]);
+    git(["config", "user.name", "Synthetic Test"]);
+    git(["config", "user.email", "synthetic@example.invalid"]);
+    git(["add", "package.json", "scripts", "src"]);
+    git(["commit", "-m", "synthetic package preflight baseline"]);
+    fs.writeFileSync(sourcePath, "export const fixture = 'synthetic private study marker';\n", "utf8");
+    if (flag === "assume-unchanged") git(["update-index", "--assume-unchanged", "src/app.mjs"]);
+    if (flag === "skip-worktree") git(["update-index", "--skip-worktree", "src/app.mjs"]);
+
+    const result = spawnSync(process.execPath, [path.join(scriptsDir, "check-package-inputs.mjs")], { cwd: root, encoding: "utf8" });
+    assert.notEqual(result.status, 0, `${flag} tracked modification must fail package preflight`);
+    assert.match(result.stderr, /modified tracked files/);
+    assert.match(result.stderr, /src\/app\.mjs/);
+  }
+});
+
 test("package audit rejects private basenames at any depth", () => {
   assert.deepEqual(findPrivatePackagePaths([
     "config.json",
