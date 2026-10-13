@@ -50,11 +50,19 @@ function createRemote(root) {
   const note = path.join(seed, "20-考点", "Synthetic.md");
   fs.mkdirSync(path.dirname(note));
   fs.writeFileSync(note, "# Synthetic upstream v1\n", "utf8");
+  const image = path.join(seed, "90-图片", "Synthetic.md");
+  fs.mkdirSync(path.dirname(image));
+  fs.writeFileSync(image, "synthetic excluded image fixture\n", "utf8");
   git(["add", "."], seed);
   git(["commit", "-m", "initial synthetic vault"], seed);
   git(["remote", "add", "origin", pathToFileURL(upstream).href], seed);
   git(["push", "--set-upstream", "origin", "main"], seed);
   return { upstream, seed, note };
+}
+
+function cloneVault(upstream, vault) {
+  git(["clone", "--depth", "1", "--filter=blob:none", "--sparse", pathToFileURL(upstream).href, vault]);
+  git(["sparse-checkout", "set", "--no-cone", "/*", "!/90-图片/"], vault);
 }
 
 function tempRoot(t) {
@@ -67,13 +75,18 @@ test("dirty vault refresh rejects before replacing local edits", async (t) => {
   const root = tempRoot(t);
   const restoreEnvironment = isolateGitEnvironment(root);
   try {
-    const { upstream } = createRemote(root);
+    const { upstream, seed } = createRemote(root);
     const vault = path.join(root, "vault");
-    git(["clone", pathToFileURL(upstream).href, vault]);
+    cloneVault(upstream, vault);
     const note = path.join(vault, "20-考点", "Synthetic.md");
     const headBefore = git(["rev-parse", "HEAD"], vault);
+    const upstreamBefore = git(["rev-parse", "@{upstream}"], vault);
     const localContent = "# Synthetic local edit\n";
     fs.writeFileSync(note, localContent, "utf8");
+    fs.writeFileSync(path.join(seed, "20-考点", "Synthetic.md"), "# Synthetic upstream v2\n", "utf8");
+    git(["add", "."], seed);
+    git(["commit", "-m", "advance synthetic upstream"], seed);
+    git(["push", "origin", "main"], seed);
 
     let failure;
     try {
@@ -84,6 +97,7 @@ test("dirty vault refresh rejects before replacing local edits", async (t) => {
 
     assert.equal(fs.readFileSync(note, "utf8"), localContent, "refresh must preserve the local note");
     assert.equal(git(["rev-parse", "HEAD"], vault), headBefore);
+    assert.equal(git(["rev-parse", "@{upstream}"], vault), upstreamBefore, "dirty refresh must not fetch first");
     assert.notEqual(git(["status", "--porcelain"], vault), "");
     assert.equal(git(["remote", "get-url", "origin"], vault), pathToFileURL(upstream).href);
     assert.match(String(failure?.message ?? ""), /未提交的本地改动/);
@@ -99,7 +113,7 @@ test("staged vault refresh rejects without clearing the index", async (t) => {
   try {
     const { upstream } = createRemote(root);
     const vault = path.join(root, "vault");
-    git(["clone", pathToFileURL(upstream).href, vault]);
+    cloneVault(upstream, vault);
     const note = path.join(vault, "20-考点", "Synthetic.md");
     const stagedContent = "# Synthetic staged edit\n";
     fs.writeFileSync(note, stagedContent, "utf8");
@@ -123,13 +137,49 @@ test("staged vault refresh rejects without clearing the index", async (t) => {
   }
 });
 
+test("vault refresh refuses modified files marked assume-unchanged", async (t) => {
+  const root = tempRoot(t);
+  const restoreEnvironment = isolateGitEnvironment(root);
+  try {
+    const { upstream, seed } = createRemote(root);
+    const vault = path.join(root, "vault");
+    cloneVault(upstream, vault);
+    const note = path.join(vault, "20-考点", "Synthetic.md");
+    const headBefore = git(["rev-parse", "HEAD"], vault);
+    const upstreamBefore = git(["rev-parse", "@{upstream}"], vault);
+    const localContent = "# Synthetic assume-unchanged edit\n";
+    fs.writeFileSync(note, localContent, "utf8");
+    git(["update-index", "--assume-unchanged", "20-考点/Synthetic.md"], vault);
+    assert.equal(git(["status", "--porcelain", "--untracked-files=all"], vault), "");
+
+    fs.writeFileSync(path.join(seed, "20-考点", "Synthetic.md"), "# Synthetic upstream v2\n", "utf8");
+    git(["add", "."], seed);
+    git(["commit", "-m", "advance synthetic upstream"], seed);
+    git(["push", "origin", "main"], seed);
+
+    let failure;
+    try {
+      await importVault({ dir: vault, repo: pathToFileURL(upstream).href });
+    } catch (error) {
+      failure = error;
+    }
+
+    assert.match(String(failure?.message ?? ""), /索引标记/);
+    assert.equal(fs.readFileSync(note, "utf8"), localContent);
+    assert.equal(git(["rev-parse", "HEAD"], vault), headBefore);
+    assert.equal(git(["rev-parse", "@{upstream}"], vault), upstreamBefore);
+  } finally {
+    restoreEnvironment();
+  }
+});
+
 test("vault refresh rejects local commits that differ from the tracked upstream", async (t) => {
   const root = tempRoot(t);
   const restoreEnvironment = isolateGitEnvironment(root);
   try {
     const { upstream, seed } = createRemote(root);
     const vault = path.join(root, "vault");
-    git(["clone", pathToFileURL(upstream).href, vault]);
+    cloneVault(upstream, vault);
     git(["config", "user.name", "Synthetic Test"], vault);
     git(["config", "user.email", "synthetic@example.invalid"], vault);
     const note = path.join(vault, "20-考点", "Synthetic.md");
@@ -142,7 +192,10 @@ test("vault refresh rejects local commits that differ from the tracked upstream"
 
     fs.writeFileSync(path.join(seed, "20-考点", "Synthetic.md"), "# Synthetic upstream v2\n", "utf8");
     git(["add", "."], seed);
-    git(["commit", "-m", "update synthetic vault"], seed);
+    git(["commit", "-m", "first synthetic update"], seed);
+    fs.writeFileSync(path.join(seed, "20-考点", "Synthetic.md"), "# Synthetic upstream v3\n", "utf8");
+    git(["add", "."], seed);
+    git(["commit", "-m", "second synthetic update"], seed);
     git(["push", "origin", "main"], seed);
 
     let failure;
@@ -155,19 +208,219 @@ test("vault refresh rejects local commits that differ from the tracked upstream"
     assert.equal(fs.readFileSync(note, "utf8"), localContent);
     assert.equal(git(["rev-parse", "HEAD"], vault), localHead);
     assert.equal(git(["rev-parse", "@{upstream}"], vault), trackedHeadBefore);
-    assert.match(String(failure?.message ?? ""), /当前版本与跟踪的远端版本不一致/);
+    assert.match(String(failure?.message ?? ""), /未推送的本地提交/);
   } finally {
     restoreEnvironment();
   }
 });
 
+test("clean shallow vault behind an already-fetched upstream still refreshes", async (t) => {
+  const root = tempRoot(t);
+  const restoreEnvironment = isolateGitEnvironment(root);
+  try {
+    const { upstream, seed } = createRemote(root);
+    const vault = path.join(root, "vault");
+    cloneVault(upstream, vault);
+    fs.writeFileSync(path.join(seed, "20-考点", "Synthetic.md"), "# Synthetic upstream v2\n", "utf8");
+    git(["add", "."], seed);
+    git(["commit", "-m", "first synthetic update"], seed);
+    fs.writeFileSync(path.join(seed, "20-考点", "Synthetic.md"), "# Synthetic upstream v3\n", "utf8");
+    git(["add", "."], seed);
+    git(["commit", "-m", "second synthetic update"], seed);
+    git(["push", "origin", "main"], seed);
+    git(["fetch", "origin"], vault);
+    const headBefore = git(["rev-parse", "HEAD"], vault);
+    const trackingHead = git(["rev-parse", "@{upstream}"], vault);
+    assert.notEqual(headBefore, trackingHead);
+
+    let result;
+    let failure;
+    try {
+      result = await importVault({ dir: vault, repo: pathToFileURL(upstream).href });
+    } catch (error) {
+      failure = error;
+    }
+
+    assert.equal(failure, undefined, `clean behind-upstream refresh failed: ${failure?.message ?? "unknown error"}`);
+    assert.equal(result.commit, trackingHead);
+    assert.equal(fs.readFileSync(path.join(vault, "20-考点", "Synthetic.md"), "utf8"), "# Synthetic upstream v3\n");
+  } finally {
+    restoreEnvironment();
+  }
+});
+
+test("refresh preserves an ignored local file that upstream starts tracking", async (t) => {
+  const root = tempRoot(t);
+  const restoreEnvironment = isolateGitEnvironment(root);
+  try {
+    const { upstream, seed } = createRemote(root);
+    const vault = path.join(root, "vault");
+    cloneVault(upstream, vault);
+    const localOnly = path.join(vault, "20-考点", "Added.md");
+    const excludePath = path.join(vault, ".git", "info", "exclude");
+    fs.appendFileSync(excludePath, "\n20-考点/Added.md\n", "utf8");
+    const localContent = "# Synthetic ignored local file\n";
+    fs.writeFileSync(localOnly, localContent, "utf8");
+    assert.equal(git(["status", "--porcelain", "--untracked-files=all"], vault), "");
+    const headBefore = git(["rev-parse", "HEAD"], vault);
+
+    fs.writeFileSync(path.join(seed, "20-考点", "Added.md"), "# Synthetic upstream file\n", "utf8");
+    git(["add", "."], seed);
+    git(["commit", "-m", "add synthetic upstream file"], seed);
+    git(["push", "origin", "main"], seed);
+
+    let result;
+    let failure;
+    try {
+      result = await importVault({ dir: vault, repo: pathToFileURL(upstream).href });
+    } catch (error) {
+      failure = error;
+    }
+
+    assert.ok(failure, "refresh must stop when an ignored local file conflicts with upstream");
+    assert.equal(fs.readFileSync(localOnly, "utf8"), localContent);
+    assert.equal(git(["rev-parse", "HEAD"], vault), headBefore);
+    assert.equal(result, undefined);
+    assert.match(String(failure?.message ?? ""), /被忽略本地文件与远端路径冲突/);
+  } finally {
+    restoreEnvironment();
+  }
+});
+
+test("refresh detects ignored paths beginning with Unicode whitespace", async (t) => {
+  const root = tempRoot(t);
+  const restoreEnvironment = isolateGitEnvironment(root);
+  try {
+    const { upstream, seed } = createRemote(root);
+    const vault = path.join(root, "vault");
+    cloneVault(upstream, vault);
+    const relPath = "\u2003Local.md";
+    const localPath = path.join(vault, relPath);
+    fs.appendFileSync(path.join(vault, ".git", "info", "exclude"), `\n${relPath}\n`, "utf8");
+    const localContent = "# Synthetic Unicode whitespace path\n";
+    fs.writeFileSync(localPath, localContent, "utf8");
+    const headBefore = git(["rev-parse", "HEAD"], vault);
+
+    const upstreamPath = path.join(seed, relPath);
+    fs.writeFileSync(upstreamPath, "# Synthetic upstream file\n", "utf8");
+    git(["add", "."], seed);
+    git(["commit", "-m", "add synthetic whitespace path"], seed);
+    git(["push", "origin", "main"], seed);
+
+    let failure;
+    try {
+      await importVault({ dir: vault, repo: pathToFileURL(upstream).href });
+    } catch (error) {
+      failure = error;
+    }
+
+    assert.match(String(failure?.message ?? ""), /被忽略本地文件与远端路径冲突/);
+    assert.equal(fs.readFileSync(localPath, "utf8"), localContent);
+    assert.equal(git(["rev-parse", "HEAD"], vault), headBefore);
+  } finally {
+    restoreEnvironment();
+  }
+});
+
+test("refresh preserves an unrelated ignored local file", async (t) => {
+  const root = tempRoot(t);
+  const restoreEnvironment = isolateGitEnvironment(root);
+  try {
+    const { upstream, seed } = createRemote(root);
+    const vault = path.join(root, "vault");
+    cloneVault(upstream, vault);
+    const localOnly = path.join(vault, "20-考点", "Local.md");
+    fs.appendFileSync(path.join(vault, ".git", "info", "exclude"), "\n20-考点/Local.md\n", "utf8");
+    const localContent = "# Synthetic unrelated local file\n";
+    fs.writeFileSync(localOnly, localContent, "utf8");
+
+    fs.writeFileSync(path.join(seed, "20-考点", "Synthetic.md"), "# Synthetic upstream v2\n", "utf8");
+    git(["add", "."], seed);
+    git(["commit", "-m", "update synthetic vault"], seed);
+    git(["push", "origin", "main"], seed);
+
+    const result = await importVault({ dir: vault, repo: pathToFileURL(upstream).href });
+
+    assert.equal(result.commit, git(["rev-parse", "HEAD"], seed));
+    assert.equal(fs.readFileSync(localOnly, "utf8"), localContent);
+    assert.equal(fs.readFileSync(path.join(vault, "20-考点", "Synthetic.md"), "utf8"), "# Synthetic upstream v2\n");
+  } finally {
+    restoreEnvironment();
+  }
+});
+
+test("refresh preserves an ignored local directory that conflicts with an upstream file", async (t) => {
+  const root = tempRoot(t);
+  const restoreEnvironment = isolateGitEnvironment(root);
+  try {
+    const { upstream, seed } = createRemote(root);
+    const vault = path.join(root, "vault");
+    cloneVault(upstream, vault);
+    const localDir = path.join(vault, "20-考点", "Local");
+    const localNote = path.join(localDir, "Private.md");
+    fs.appendFileSync(path.join(vault, ".git", "info", "exclude"), "\n20-考点/Local/\n", "utf8");
+    fs.mkdirSync(localDir);
+    const localContent = "# Synthetic ignored directory file\n";
+    fs.writeFileSync(localNote, localContent, "utf8");
+    assert.equal(git(["status", "--porcelain", "--untracked-files=all"], vault), "");
+
+    const upstreamNote = path.join(seed, "20-考点", "Local", "Added.md");
+    fs.mkdirSync(path.dirname(upstreamNote));
+    fs.writeFileSync(upstreamNote, "# Synthetic upstream nested file\n", "utf8");
+    git(["add", "."], seed);
+    git(["commit", "-m", "add synthetic nested file"], seed);
+    git(["push", "origin", "main"], seed);
+
+    let failure;
+    try {
+      await importVault({ dir: vault, repo: pathToFileURL(upstream).href });
+    } catch (error) {
+      failure = error;
+    }
+
+    assert.match(String(failure?.message ?? ""), /被忽略本地文件与远端路径冲突/);
+    assert.equal(fs.readFileSync(localNote, "utf8"), localContent);
+    assert.equal(fs.existsSync(upstreamNote.replace(path.join(seed), path.join(vault))), false);
+  } finally {
+    restoreEnvironment();
+  }
+});
+
+test("refresh skips ignored paths excluded by the sparse image rule", async (t) => {
+  const root = tempRoot(t);
+  const restoreEnvironment = isolateGitEnvironment(root);
+  try {
+    const { upstream, seed } = createRemote(root);
+    const vault = path.join(root, "vault");
+    cloneVault(upstream, vault);
+    const imagePath = path.join(vault, "90-图片", "Added.md");
+    fs.appendFileSync(path.join(vault, ".git", "info", "exclude"), "\n90-图片/Added.md\n", "utf8");
+    fs.mkdirSync(path.dirname(imagePath), { recursive: true });
+    const localContent = "# Synthetic local excluded file\n";
+    fs.writeFileSync(imagePath, localContent, "utf8");
+
+    const upstreamImage = path.join(seed, "90-图片", "Added.md");
+    fs.writeFileSync(upstreamImage, "# Synthetic upstream excluded file\n", "utf8");
+    git(["add", "."], seed);
+    git(["commit", "-m", "add synthetic excluded path"], seed);
+    git(["push", "origin", "main"], seed);
+
+    const result = await importVault({ dir: vault, repo: pathToFileURL(upstream).href });
+
+    assert.equal(result.commit, git(["rev-parse", "HEAD"], seed));
+    assert.equal(fs.readFileSync(imagePath, "utf8"), localContent);
+    assert.equal(fs.existsSync(path.join(vault, "20-考点", "Synthetic.md")), true);
+  } finally {
+    restoreEnvironment();
+  }
+});
 test("clean vault refresh still advances to the upstream commit", async (t) => {
   const root = tempRoot(t);
   const restoreEnvironment = isolateGitEnvironment(root);
   try {
     const { upstream, seed } = createRemote(root);
     const vault = path.join(root, "vault");
-    git(["clone", pathToFileURL(upstream).href, vault]);
+    cloneVault(upstream, vault);
 
     fs.writeFileSync(path.join(seed, "20-考点", "Synthetic.md"), "# Synthetic upstream v2\n", "utf8");
     git(["add", "."], seed);

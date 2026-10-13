@@ -27,7 +27,8 @@ function toPosix(p) {
 
 function git(args, { cwd, allowFail = false } = {}) {
   try {
-    return execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
+    const output = execFileSync("git", args, { cwd, encoding: "utf8", maxBuffer: 64 * 1024 * 1024, stdio: ["ignore", "pipe", "pipe"] });
+    return output.includes("\0") ? output : output.trim();
   } catch (error) {
     if (allowFail) return null;
     const detail = String(error?.stderr ?? error?.message ?? error).trim();
@@ -37,6 +38,60 @@ function git(args, { cwd, allowFail = false } = {}) {
 
 function isClone(dir) {
   return fs.existsSync(path.join(dir, ".git"));
+}
+
+function rejectHiddenIndexChanges({ cwd }) {
+  const entries = git(["ls-files", "-v", "-z"], { cwd }).split("\0").filter(Boolean);
+  const flagged = entries
+    .map((entry) => ({ tag: entry[0], filePath: entry.slice(2).replace(/\\/g, "/") }))
+    .filter(({ tag, filePath }) => tag !== "H" && !filePath.toLowerCase().startsWith("90-图片/"));
+  if (flagged.length) {
+    const paths = [...new Set(flagged.map(({ filePath }) => filePath))].slice(0, 3).join("、");
+    throw new Error(`脑库副本存在可能隐藏本地改动的索引标记（${paths}），为保护本地内容已取消更新。请先检查这些文件的 Git 索引状态后重试。`);
+  }
+}
+
+function rejectIgnoredFileConflicts({ cwd, commit }) {
+  const ignored = git(["ls-files", "--others", "--ignored", "--exclude-standard", "--directory", "-z"], { cwd })
+    .split("\0")
+    .map((entry) => entry.replace(/\/+$/, ""))
+    .filter(Boolean);
+  if (!ignored.length) return;
+
+  // sparse checkout includes the repository except for its large third-party image tree.
+  const checkoutPaths = git(["ls-tree", "-r", "--name-only", "-z", commit], { cwd })
+    .split("\0")
+    .filter((entry) => entry && !entry.toLowerCase().startsWith("90-图片/"));
+  const root = { children: new Map(), terminal: false };
+  for (const checkoutPath of checkoutPaths) {
+    let node = root;
+    for (const segment of checkoutPath.toLowerCase().split("/")) {
+      if (!node.children.has(segment)) node.children.set(segment, { children: new Map(), terminal: false });
+      node = node.children.get(segment);
+    }
+    node.terminal = true;
+  }
+
+  const conflicts = [];
+  for (const localPath of ignored) {
+    let node = root;
+    let conflict = false;
+    const segments = localPath.replace(/\\/g, "/").toLowerCase().split("/");
+    for (const segment of segments) {
+      if (!node) break;
+      if (node.terminal) {
+        conflict = true;
+        break;
+      }
+      node = node.children.get(segment);
+    }
+    if (node && (node.terminal || node.children.size > 0)) conflict = true;
+    if (conflict) conflicts.push(localPath);
+  }
+  if (conflicts.length) {
+    const paths = [...new Set(conflicts)].slice(0, 3).join("、");
+    throw new Error(`脑库副本中的被忽略本地文件与远端路径冲突（${paths}），为保护本地内容已取消更新。请先备份或移走这些文件后重试。`);
+  }
 }
 
 // 稀疏克隆或就地更新；目录结构固定，不含 90-图片，可重复运行。
@@ -54,20 +109,53 @@ export async function importVault({ dir, repo = DEFAULT_REPO, log = logNothing }
     git(["clone", "--depth", "1", "--filter=blob:none", "--sparse", repo, target]);
     git(["sparse-checkout", "set", "--no-cone", ...SPARSE_PATTERNS], { cwd: target });
   } else {
+    rejectHiddenIndexChanges({ cwd: target });
     const dirty = git(["status", "--porcelain", "--untracked-files=all"], { cwd: target });
     if (dirty) {
       throw new Error("脑库副本存在未提交的本地改动，为保护本地内容已取消更新。请先备份或提交这些改动后重试。");
     }
     const head = git(["rev-parse", "HEAD"], { cwd: target });
     const upstream = git(["rev-parse", "@{upstream}"], { cwd: target, allowFail: true });
-    if (!upstream || head !== upstream) {
-      throw new Error("脑库副本当前版本与跟踪的远端版本不一致，为保护本地提交已取消更新。请先备份或检查该副本后重试。");
+    if (!upstream) {
+      throw new Error("脑库副本没有可用的跟踪远端，为保护本地提交已取消更新。请先检查该副本后重试。");
+    }
+    const currentBase = git(["merge-base", head, upstream], { cwd: target, allowFail: true });
+    if (head !== upstream && currentBase !== null && currentBase !== head) {
+      throw new Error("脑库副本当前版本包含未推送的本地提交或与跟踪远端分叉，为保护本地提交已取消更新。请先备份或检查该副本后重试。");
     }
     log("脑库副本已存在，拉取远端最新并重放 sparse 规则…");
     git(["fetch", "--depth", "1", "origin"], { cwd: target });
+    let fetched = git(["rev-parse", "FETCH_HEAD"], { cwd: target });
+    let refreshedBase = git(["merge-base", head, fetched], { cwd: target, allowFail: true });
+    const isShallow = git(["rev-parse", "--is-shallow-repository"], { cwd: target }) === "true";
+    let historyCount = Number(git(["rev-list", "--count", fetched], { cwd: target }));
+    for (let depth = 1; isShallow && head !== fetched && refreshedBase !== head; depth *= 4) {
+      git(["fetch", `--deepen=${depth}`, "origin"], { cwd: target });
+      fetched = git(["rev-parse", "FETCH_HEAD"], { cwd: target });
+      refreshedBase = git(["merge-base", head, fetched], { cwd: target, allowFail: true });
+      if (refreshedBase === head) break;
+      const nextHistoryCount = Number(git(["rev-list", "--count", fetched], { cwd: target }));
+      if (nextHistoryCount <= historyCount) break;
+      historyCount = nextHistoryCount;
+    }
+    if (head !== fetched && refreshedBase !== head) {
+      throw new Error("脑库副本当前版本与待更新远端版本不是快进关系，为保护本地提交已取消更新。请先备份或检查该副本后重试。");
+    }
+    const dirtyAfterFetch = git(["status", "--porcelain", "--untracked-files=all"], { cwd: target });
+    let dirtyIndexAfterFetch = false;
+    try {
+      rejectHiddenIndexChanges({ cwd: target });
+    } catch {
+      dirtyIndexAfterFetch = true;
+    }
+    if (dirtyAfterFetch || dirtyIndexAfterFetch) {
+      throw new Error("脑库副本在检查期间出现本地改动，为保护本地内容已取消更新。请先备份或提交这些改动后重试。");
+    }
+    rejectIgnoredFileConflicts({ cwd: target, commit: fetched });
     // 先重放 sparse 规则再重置工作树，避免旧规则把 90-图片 拉回来。
     git(["sparse-checkout", "set", "--no-cone", ...SPARSE_PATTERNS], { cwd: target });
-    git(["reset", "--hard", "FETCH_HEAD"], { cwd: target });
+    rejectIgnoredFileConflicts({ cwd: target, commit: fetched });
+    git(["reset", "--keep", fetched], { cwd: target });
   }
 
   const commit = git(["rev-parse", "HEAD"], { cwd: target, allowFail: true });
