@@ -36,6 +36,9 @@ jobs:
       - name: Package privacy regression
         run: npm run test:package-privacy
 
+      - name: Release tag validation regression
+        run: npm run test:release-tag
+
       - name: Syntax check
         shell: pwsh
         run: |
@@ -64,13 +67,9 @@ jobs:
 
       - name: Check tag matches package.json version
         if: startsWith(github.ref, 'refs/tags/v')
-        shell: pwsh
-        run: |
-          $tagVersion = "${{ github.ref_name }}".TrimStart("v")
-          $pkgVersion = (Get-Content package.json -Raw | ConvertFrom-Json).version
-          if ($pkgVersion -ne $tagVersion) {
-            throw "package.json version $pkgVersion does not match tag ${{ github.ref_name }}"
-          }
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: node scripts/validate-release-tag.mjs
 
   publish:
     if: >-
@@ -86,6 +85,10 @@ jobs:
         with:
           persist-credentials: false
 
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+
       - name: Download build artifact
         uses: actions/download-artifact@v7
         with:
@@ -97,10 +100,14 @@ jobs:
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
         run: |
-          $asset = "dist/exam-workbench-${{ github.ref_name }}-win32-x64.zip"
+          node scripts/validate-release-tag.mjs
+          if ($LASTEXITCODE -ne 0) { throw "Release tag validation failed." }
+          $tag = $env:RELEASE_TAG
+          $asset = "dist/exam-workbench-$tag-win32-x64.zip"
           Copy-Item dist/exam-workbench-win32-x64.zip $asset
-          gh release create "${{ github.ref_name }}" $asset --title "${{ github.ref_name }}" --generate-notes
+          gh release create $tag $asset --title $tag --generate-notes
 
       - name: Update main-latest pre-release (push to main)
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'

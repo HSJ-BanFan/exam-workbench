@@ -20,6 +20,7 @@
     "start": "electron .",
     "selftest": "electron . --self-test",
     "test:naoku-import": "node --test test/naoku-import.test.mjs",
+    "test:release-tag": "node --test test/release-tag.test.mjs",
     "test:package-privacy": "node --test test/package-privacy.test.mjs",
     "pack": "electron-packager . exam-workbench --platform=win32 --arch=x64 --out=dist --overwrite --prune=true --ignore=dist --ignore=.selftest --ignore=config\\.json$ --ignore=session\\.json$ --ignore=saduck-session\\.json$ --ignore=\\.local\\.json$"
   },

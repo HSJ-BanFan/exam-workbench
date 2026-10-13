@@ -109,6 +109,10 @@ export async function importVault({ dir, repo = DEFAULT_REPO, log = logNothing }
     git(["clone", "--depth", "1", "--filter=blob:none", "--sparse", repo, target]);
     git(["sparse-checkout", "set", "--no-cone", ...SPARSE_PATTERNS], { cwd: target });
   } else {
+    const origin = git(["remote", "get-url", "origin"], { cwd: target, allowFail: true });
+    if (!origin || origin !== repo) {
+      throw new Error("脑库副本的 origin 与配置的脑库源不一致，为保护本地内容已取消更新。请检查 naokuDir 与 repo 配置后重试。");
+    }
     rejectHiddenIndexChanges({ cwd: target });
     const dirty = git(["status", "--porcelain", "--untracked-files=all"], { cwd: target });
     if (dirty) {

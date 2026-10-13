@@ -511,3 +511,31 @@ test("clean vault refresh still advances to the upstream commit", async (t) => {
     restoreEnvironment();
   }
 });
+
+test("existing vault refuses refresh when configured repo differs from origin", async (t) => {
+  const root = tempRoot(t);
+  const restoreEnvironment = isolateGitEnvironment(root);
+  try {
+    const { upstream } = createRemote(root);
+    const vault = path.join(root, "vault");
+    cloneVault(upstream, vault);
+    const headBefore = git(["rev-parse", "HEAD"], vault);
+    const upstreamBefore = git(["rev-parse", "@{upstream}"], vault);
+    const originBefore = git(["remote", "get-url", "origin"], vault);
+    const otherRepo = pathToFileURL(path.join(root, "other-repo.git")).href;
+
+    let failure;
+    try {
+      await importVault({ dir: vault, repo: otherRepo });
+    } catch (error) {
+      failure = error;
+    }
+
+    assert.match(String(failure?.message ?? ""), /origin 与配置的脑库源不一致/);
+    assert.equal(git(["rev-parse", "HEAD"], vault), headBefore);
+    assert.equal(git(["rev-parse", "@{upstream}"], vault), upstreamBefore);
+    assert.equal(git(["remote", "get-url", "origin"], vault), originBefore);
+  } finally {
+    restoreEnvironment();
+  }
+});
