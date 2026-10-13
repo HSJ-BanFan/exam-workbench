@@ -539,3 +539,34 @@ test("existing vault refuses refresh when configured repo differs from origin", 
     restoreEnvironment();
   }
 });
+
+test("existing vault refuses refresh when origin has an additional fetch URL", async (t) => {
+  const root = tempRoot(t);
+  const restoreEnvironment = isolateGitEnvironment(root);
+  try {
+    const { upstream } = createRemote(root);
+    const vault = path.join(root, "vault");
+    cloneVault(upstream, vault);
+    const otherRepo = pathToFileURL(path.join(root, "other-repo.git")).href;
+    git(["remote", "set-url", "--add", "origin", otherRepo], vault);
+    const headBefore = git(["rev-parse", "HEAD"], vault);
+    const upstreamBefore = git(["rev-parse", "@{upstream}"], vault);
+
+    let failure;
+    try {
+      await importVault({ dir: vault, repo: pathToFileURL(upstream).href });
+    } catch (error) {
+      failure = error;
+    }
+
+    assert.match(String(failure?.message ?? ""), /origin 与配置的脑库源不一致/);
+    assert.equal(git(["rev-parse", "HEAD"], vault), headBefore);
+    assert.equal(git(["rev-parse", "@{upstream}"], vault), upstreamBefore);
+    assert.deepEqual(git(["remote", "get-url", "--all", "origin"], vault).split(/\r?\n/), [
+      pathToFileURL(upstream).href,
+      otherRepo,
+    ]);
+  } finally {
+    restoreEnvironment();
+  }
+});

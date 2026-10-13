@@ -1,6 +1,7 @@
 import fs from "node:fs";
 
 const PRIVATE_BASENAMES = new Set(["config.json", "session.json", "saduck-session.json"]);
+const PACK_IGNORED_ROOTS = new Set([".git", "node_modules", "dist", ".selftest"]);
 const REQUIRED_PACK_IGNORES = [
   "config\\.json$",
   "session\\.json$",
@@ -15,6 +16,42 @@ export function isPrivatePackagePath(value) {
 
 export function findPrivatePackagePaths(values) {
   return values.map(String).filter(isPrivatePackagePath);
+}
+
+function normalizePackagePath(value) {
+  return String(value).replaceAll("\\", "/").replace(/^\.\//, "").replace(/^\/+/, "").replace(/\/+$/, "");
+}
+
+export function findUncoveredPackInputs(values) {
+  return values
+    .map(normalizePackagePath)
+    .filter((value) => {
+      const basename = value.split("/").at(-1);
+      const privateIgnoreMatches = PRIVATE_BASENAMES.has(basename) || basename.endsWith(".local.json");
+      return value && !PACK_IGNORED_ROOTS.has(value.split("/")[0]) && !privateIgnoreMatches;
+    });
+}
+
+export function listProductionPackageRoots(packageLock) {
+  return Object.entries(packageLock?.packages ?? {})
+    .filter(([packagePath, metadata]) =>
+      packagePath.startsWith("node_modules/") && metadata?.dev !== true && metadata?.devOptional !== true
+    )
+    .map(([packagePath]) => packagePath);
+}
+
+export function findUntrackedPackagedPaths(values, trackedValues, productionPackageRoots = []) {
+  const tracked = new Set(trackedValues.map(normalizePackagePath).map((value) => value.toLowerCase()));
+  const allowedPackages = productionPackageRoots
+    .map(normalizePackagePath)
+    .map((value) => `${value.toLowerCase()}/`);
+  return values
+    .map(normalizePackagePath)
+    .filter((value) => {
+      const normalized = value.toLowerCase();
+      const productionDependency = allowedPackages.some((prefix) => normalized.startsWith(prefix));
+      return value && !tracked.has(normalized) && !productionDependency;
+    });
 }
 
 export function findMissingPackIgnores(script) {
