@@ -5,7 +5,6 @@ import { execFileSync } from "node:child_process";
 import {
   findMissingPackIgnores,
   findPrivatePackagePaths,
-  listProductionPackageFiles,
   findUncoveredPackInputs,
   findUntrackedPackagedPaths,
   listFiles,
@@ -16,7 +15,6 @@ const packageDir = path.resolve(packageDirArg);
 if (!fs.statSync(packageDir).isDirectory()) throw new Error(`packaged app directory missing: ${packageDir}`);
 
 const packageJson = JSON.parse(fs.readFileSync("package.json", "utf8"));
-const packageLock = JSON.parse(fs.readFileSync("package-lock.json", "utf8"));
 const missingIgnores = findMissingPackIgnores(packageJson.scripts?.pack ?? "");
 if (missingIgnores.length) throw new Error(`pack command is missing private-file ignores: ${missingIgnores.join(", ")}`);
 const root = process.cwd();
@@ -52,10 +50,9 @@ function listAsarFiles(directory, prefix = "") {
 }
 const appFiles = listAsarFiles(getRawHeader(archivePath).header);
 const trackedFiles = execFileSync("git", ["ls-tree", "-r", "--name-only", "-z", "HEAD"], { cwd: root, encoding: "utf8" }).split("\0").filter(Boolean);
-const productionPackageFiles = listProductionPackageFiles(root, packageLock);
 const violations = findPrivatePackagePaths([...externalFiles, ...appFiles]);
 if (violations.length) throw new Error(`private local files found in package: ${violations.join(", ")}`);
-const untrackedPackagedFiles = findUntrackedPackagedPaths(appFiles, trackedFiles, productionPackageFiles);
+const untrackedPackagedFiles = findUntrackedPackagedPaths(appFiles, trackedFiles);
 if (untrackedPackagedFiles.length) {
   throw new Error(`package contains source files that are not tracked by this checkout: ${untrackedPackagedFiles.join(", ")}`);
 }

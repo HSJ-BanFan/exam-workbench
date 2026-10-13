@@ -3,12 +3,12 @@ import path from "node:path";
 
 const PRIVATE_BASENAMES = new Set(["config.json", "session.json", "saduck-session.json"]);
 const PACK_IGNORED_ROOTS = new Set([".git", "node_modules", "dist", ".selftest"]);
-const PACK_GENERATED_FILES = new Set(["node_modules/.package-lock.json"]);
 const REQUIRED_PACK_IGNORES = [
   "config\\.json$",
   "session\\.json$",
   "saduck-session\\.json$",
   "\\.local\\.json$",
+  "\\.package-lock\\.json$",
 ];
 
 export function isPrivatePackagePath(value) {
@@ -41,44 +41,13 @@ export function findUncoveredPackInputs(values) {
     });
 }
 
-export function listProductionPackageRoots(packageLock) {
-  return Object.entries(packageLock?.packages ?? {})
-    .filter(([packagePath, metadata]) =>
-      packagePath.startsWith("node_modules/") && metadata?.dev !== true && metadata?.devOptional !== true
-    )
-    .map(([packagePath]) => packagePath);
-}
-
-export function listProductionPackageFiles(root, packageLock) {
-  const files = new Set();
-  const absoluteRoot = path.resolve(root);
-  for (const packageRoot of listProductionPackageRoots(packageLock)) {
-    const segments = packageRoot.split("/");
-    if (!packageRoot.startsWith("node_modules/") || segments.some((part) => !part || part === "." || part === "..")) {
-      throw new Error(`invalid production package path in lockfile: ${packageRoot}`);
-    }
-    const packageDirectory = path.resolve(absoluteRoot, ...segments);
-    const relative = path.relative(absoluteRoot, packageDirectory);
-    if (relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
-      throw new Error(`production package path escapes the project root: ${packageRoot}`);
-    }
-    if (!fs.existsSync(packageDirectory) || !fs.statSync(packageDirectory).isDirectory()) continue;
-    for (const file of listFiles(root, packageRoot)) files.add(normalizePackagePath(file));
-  }
-  return [...files];
-}
-
-export function findUntrackedPackagedPaths(values, trackedValues, productionPackageFiles = []) {
+export function findUntrackedPackagedPaths(values, trackedValues) {
   const tracked = new Set(trackedValues.map(normalizePackagePath).map((value) => value.toLowerCase()));
-  const allowedDependencyFiles = new Set(productionPackageFiles
-    .map(normalizePackagePath)
-    .map((value) => value.toLowerCase()));
   return values
     .map(normalizePackagePath)
     .filter((value) => {
       const normalized = value.toLowerCase();
-      const productionDependency = allowedDependencyFiles.has(normalized);
-      return value && !tracked.has(normalized) && !productionDependency && !PACK_GENERATED_FILES.has(normalized);
+      return value && !tracked.has(normalized);
     });
 }
 

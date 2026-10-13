@@ -22,7 +22,7 @@
     "test:naoku-import": "node --test test/naoku-import.test.mjs",
     "test:release-tag": "node --test test/release-tag.test.mjs",
     "test:package-privacy": "node --test test/package-privacy.test.mjs",
-    "pack": "node scripts/check-package-inputs.mjs && electron-packager . exam-workbench --platform=win32 --arch=x64 --out=dist --prune=true --ignore=dist --ignore=.selftest --ignore=config\\.json$ --ignore=session\\.json$ --ignore=saduck-session\\.json$ --ignore=\\.local\\.json$ && node scripts/verify-package-privacy.mjs dist/exam-workbench-win32-x64"
+    "pack": "node scripts/check-package-inputs.mjs && electron-packager . exam-workbench --platform=win32 --arch=x64 --out=dist --prune=true --ignore=dist --ignore=\\.package-lock\\.json$ --ignore=.selftest --ignore=config\\.json$ --ignore=session\\.json$ --ignore=saduck-session\\.json$ --ignore=\\.local\\.json$ && node scripts/verify-package-privacy.mjs dist/exam-workbench-win32-x64"
   },
   "engines": {
     "node": ">=22.12"
