@@ -54,6 +54,15 @@ export async function importVault({ dir, repo = DEFAULT_REPO, log = logNothing }
     git(["clone", "--depth", "1", "--filter=blob:none", "--sparse", repo, target]);
     git(["sparse-checkout", "set", "--no-cone", ...SPARSE_PATTERNS], { cwd: target });
   } else {
+    const dirty = git(["status", "--porcelain", "--untracked-files=all"], { cwd: target });
+    if (dirty) {
+      throw new Error("脑库副本存在未提交的本地改动，为保护本地内容已取消更新。请先备份或提交这些改动后重试。");
+    }
+    const head = git(["rev-parse", "HEAD"], { cwd: target });
+    const upstream = git(["rev-parse", "@{upstream}"], { cwd: target, allowFail: true });
+    if (!upstream || head !== upstream) {
+      throw new Error("脑库副本当前版本与跟踪的远端版本不一致，为保护本地提交已取消更新。请先备份或检查该副本后重试。");
+    }
     log("脑库副本已存在，拉取远端最新并重放 sparse 规则…");
     git(["fetch", "--depth", "1", "origin"], { cwd: target });
     // 先重放 sparse 规则再重置工作树，避免旧规则把 90-图片 拉回来。

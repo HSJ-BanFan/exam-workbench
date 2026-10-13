@@ -112,8 +112,9 @@
 
 ### `POST /api/naoku/import` / `POST /api/naoku/index`
 
-`import` 幂等：目录无 `.git` 时按 `--depth 1 --filter=blob:none --sparse` 克隆，已存在时
-`fetch --depth 1` + 重放 sparse 规则 + `reset --hard FETCH_HEAD`（不递归删除任何目录）。
+`import` 幂等：目录无 `.git` 时按 `--depth 1 --filter=blob:none --sparse` 克隆。已存在的副本会先检查
+`git status --porcelain --untracked-files=all` 并确认 `HEAD` 与跟踪的远端版本一致；有未提交改动或本地提交偏离时请求失败并保留本地内容。
+通过检查后才执行 `fetch --depth 1` + 重放 sparse 规则 + `reset --hard FETCH_HEAD`。
 
 ```json
 { "ok": true, "dir": "D:\\Documents\\fenbi-sync\\考公脑库", "repo": "https://github.com/ERRRC/kaogongzhentizhengliu.git", "commit": "84ab93d4b6…", "cloned": false }

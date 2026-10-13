@@ -127,6 +127,7 @@ exam-workbench.exe --naoku-import
 导入用稀疏克隆（`--depth 1 --filter=blob:none --sparse`），**默认排除 `90-图片`**（21,829 张第三方
 配图，约 207MB）。索引写在 `脑库索引/`，只含连接关系与考点母题摘要（截断到 300 字符），不含题面原文；
 题面仍用 `/api/tiku/questions` 按题号取。
+已有副本更新前会检查未提交改动，并确认本地提交与跟踪远端一致；发现差异会取消更新并保留本地内容。
 
 副本刻意不放进数据目录：数据目录通常位于 Obsidian 库内，而脑库是 2 万余篇外来笔记，落进去会污染库图谱，
 并让库校验器把每篇都判为 `type 无效`。要换位置就改 `%APPDATA%\备考工作台\config.json` 里的 `naokuDir`
@@ -220,6 +221,7 @@ Claude Code（项目根 `.mcp.json`）：
 ```powershell
 npm start                       # 开发运行
 npm run pack                    # 打包
+npm run test:naoku-import      # 合成本地 Git 远端回归测试，不访问真实数据或网络
 node scripts/dev-sync-test.mjs  # 不用 UI 直接跑同步引擎（SESSION_PATH 指向会话文件）
 node scripts/api-test.mjs       # 启动应用并自动化测试 HTTP 接口（含 /api/agent 与 MCP 冒烟）
 node scripts/naoku-test.mjs     # 脑库索引自测（合成 fixture；带 NAOKU_VAULT=<路径> 时对真实副本再跑一遍）
