@@ -3,7 +3,7 @@ import path from "node:path";
 
 const PRIVATE_BASENAMES = new Set(["config.json", "session.json", "saduck-session.json"]);
 const PACK_IGNORED_ROOTS = new Set([".git", "node_modules", "dist", ".selftest"]);
-const REQUIRED_PACK_IGNORES = [
+export const REQUIRED_PACK_IGNORES = [
   "config\\.json$",
   "session\\.json$",
   "saduck-session\\.json$",

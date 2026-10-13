@@ -8,6 +8,7 @@ import {
   findUncoveredPackInputs,
   findUntrackedPackagedPaths,
   listFiles,
+  REQUIRED_PACK_IGNORES,
 } from "./package-privacy.mjs";
 
 const [packageDirArg = "dist/exam-workbench-win32-x64"] = process.argv.slice(2);
@@ -62,7 +63,7 @@ process.stdout.write(JSON.stringify({
   packageDir,
   appAsarEntryCount: appFiles.length,
   checkedExternalFiles: externalFiles.length,
-  requiredIgnoreRules: 4,
+  requiredIgnoreRules: REQUIRED_PACK_IGNORES.length,
   privatePathViolations: 0,
   untrackedPackagedFiles: 0,
 }, null, 2));

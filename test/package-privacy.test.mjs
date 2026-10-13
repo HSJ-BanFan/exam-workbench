@@ -13,6 +13,7 @@ import {
   findUncoveredPackInputs,
   findUntrackedPackagedPaths,
   isPrivatePackagePath,
+  REQUIRED_PACK_IGNORES,
 } from "../scripts/package-privacy.mjs";
 
 const packageJson = JSON.parse(fs.readFileSync(new URL("../package.json", import.meta.url), "utf8"));
@@ -20,6 +21,7 @@ const require = createRequire(new URL("../package.json", import.meta.url));
 const { createPackage } = require("@electron/asar");
 
 test("pack command explicitly ignores local config, session, and local JSON files", () => {
+  assert.equal(REQUIRED_PACK_IGNORES.length, 5);
   assert.deepEqual(findMissingPackIgnores(packageJson.scripts.pack), []);
   assert.match(packageJson.scripts.pack, /node scripts\/check-package-inputs\.mjs/);
   assert.doesNotMatch(packageJson.scripts.pack, /--overwrite(?:\s|$)/);
