@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { createRequire } from "node:module";
 import fs from "node:fs";
 import os from "node:os";
@@ -37,6 +37,32 @@ test("package preflight refuses an existing output without changing its contents
   fs.writeFileSync(sentinel, "synthetic data\n", "utf8");
   assert.throws(() => assertPackageOutputAbsent(root), /refusing to overwrite/);
   assert.equal(fs.readFileSync(sentinel, "utf8"), "synthetic data\n");
+});
+
+test("package preflight rejects staged study data that git no longer lists as untracked", (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "exam-workbench-package-staged-input-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const scriptsDir = path.join(root, "scripts");
+  fs.mkdirSync(scriptsDir, { recursive: true });
+  for (const name of ["check-package-inputs.mjs", "package-privacy.mjs"]) {
+    fs.copyFileSync(new URL("../scripts/" + name, import.meta.url), path.join(scriptsDir, name));
+  }
+  fs.writeFileSync(path.join(root, "package.json"), JSON.stringify(packageJson, null, 2) + "\n", "utf8");
+  const git = (args) => execFileSync("git", args, { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
+  git(["init", "--initial-branch=main"]);
+  git(["config", "user.name", "Synthetic Test"]);
+  git(["config", "user.email", "synthetic@example.invalid"]);
+  git(["add", "package.json", "scripts"]);
+  git(["commit", "-m", "synthetic package preflight baseline"]);
+
+  fs.mkdirSync(path.join(root, "data"), { recursive: true });
+  fs.writeFileSync(path.join(root, "data", "history.json"), "{\"synthetic\":true}\n", "utf8");
+  git(["add", "data/history.json"]);
+  const script = path.join(scriptsDir, "check-package-inputs.mjs");
+  const result = spawnSync(process.execPath, [script], { cwd: root, encoding: "utf8" });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /staged additions not excluded/);
+  assert.match(result.stderr, /data\/history\.json/);
 });
 
 test("package audit rejects private basenames at any depth", () => {

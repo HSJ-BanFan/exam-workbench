@@ -29,6 +29,15 @@ const uncoveredInputs = findUncoveredPackInputs(untrackedInputs);
 if (uncoveredInputs.length) {
   throw new Error(`pack source contains untracked files not excluded by the pack command: ${uncoveredInputs.join(", ")}`);
 }
+const stagedAdditions = execFileSync(
+  "git",
+  ["diff", "--cached", "--diff-filter=A", "--name-only", "-z"],
+  { cwd: root, encoding: "utf8" }
+).split("\0").filter(Boolean);
+const uncoveredStaged = findUncoveredPackInputs(stagedAdditions);
+if (uncoveredStaged.length) {
+  throw new Error(`pack source contains staged additions not excluded by the pack command: ${uncoveredStaged.join(", ")}`);
+}
 
 const archivePath = path.join(packageDir, "resources", "app.asar");
 if (!fs.existsSync(archivePath)) throw new Error(`app.asar missing: ${archivePath}`);
@@ -42,7 +51,7 @@ function listAsarFiles(directory, prefix = "") {
   });
 }
 const appFiles = listAsarFiles(getRawHeader(archivePath).header);
-const trackedFiles = execFileSync("git", ["ls-files", "-z"], { cwd: root, encoding: "utf8" }).split("\0").filter(Boolean);
+const trackedFiles = execFileSync("git", ["ls-tree", "-r", "--name-only", "-z", "HEAD"], { cwd: root, encoding: "utf8" }).split("\0").filter(Boolean);
 const productionPackageRoots = listProductionPackageRoots(packageLock);
 const violations = findPrivatePackagePaths([...externalFiles, ...appFiles]);
 if (violations.length) throw new Error(`private local files found in package: ${violations.join(", ")}`);

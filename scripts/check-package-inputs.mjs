@@ -18,4 +18,14 @@ if (uncovered.length) {
   throw new Error(`pack source contains untracked files not excluded by the pack command: ${uncovered.join(", ")}`);
 }
 
-process.stdout.write(`Package inputs checked: ${untracked.length} untracked or ignored paths are covered by explicit exclusions.\n`);
+const stagedAdditions = execFileSync(
+  "git",
+  ["diff", "--cached", "--diff-filter=A", "--name-only", "-z"],
+  { cwd: root, encoding: "utf8" }
+).split("\0").filter(Boolean);
+const uncoveredStaged = findUncoveredPackInputs(stagedAdditions);
+if (uncoveredStaged.length) {
+  throw new Error(`pack source contains staged additions not excluded by the pack command: ${uncoveredStaged.join(", ")}`);
+}
+
+process.stdout.write(`Package inputs checked: ${untracked.length} untracked paths and ${stagedAdditions.length} staged additions are covered by explicit exclusions.\n`);

@@ -3,6 +3,7 @@
 
 import fs from "node:fs";
 import path from "node:path";
+import { randomUUID } from "node:crypto";
 import { execFileSync } from "node:child_process";
 
 export const DEFAULT_REPO = "https://github.com/ERRRC/kaogongzhentizhengliu.git";
@@ -137,44 +138,50 @@ export async function importVault({ dir, repo = DEFAULT_REPO, log = logNothing }
       throw new Error("脑库副本没有可用的跟踪远端，为保护本地提交已取消更新。请先检查该副本后重试。");
     }
     const upstreamBranch = upstreamRef.slice("refs/remotes/origin/".length);
-    const fetchRefspec = "+refs/heads/" + upstreamBranch + ":" + upstreamRef;
+    const fetchRef = "refs/exam-workbench/naoku-refresh/" + randomUUID();
+    const fetchRefspec = "+refs/heads/" + upstreamBranch + ":" + fetchRef;
     const currentBase = git(["merge-base", head, upstream], { cwd: target, allowFail: true });
     if (head !== upstream && currentBase !== null && currentBase !== head) {
       throw new Error("脑库副本当前版本包含未推送的本地提交或与跟踪远端分叉，为保护本地提交已取消更新。请先备份或检查该副本后重试。");
     }
-    log("脑库副本已存在，拉取远端最新并重放 sparse 规则…");
-    git(["fetch", "--depth", "1", "origin", fetchRefspec], { cwd: target });
-    let fetched = git(["rev-parse", "FETCH_HEAD"], { cwd: target });
-    let refreshedBase = git(["merge-base", head, fetched], { cwd: target, allowFail: true });
-    const isShallow = git(["rev-parse", "--is-shallow-repository"], { cwd: target }) === "true";
-    let historyCount = Number(git(["rev-list", "--count", fetched], { cwd: target }));
-    for (let depth = 1; isShallow && head !== fetched && refreshedBase !== head; depth *= 4) {
-      git(["fetch", "--deepen=" + depth, "origin", fetchRefspec], { cwd: target });
-      fetched = git(["rev-parse", "FETCH_HEAD"], { cwd: target });
-      refreshedBase = git(["merge-base", head, fetched], { cwd: target, allowFail: true });
-      if (refreshedBase === head) break;
-      const nextHistoryCount = Number(git(["rev-list", "--count", fetched], { cwd: target }));
-      if (nextHistoryCount <= historyCount) break;
-      historyCount = nextHistoryCount;
-    }
-    if (head !== fetched && refreshedBase !== head) {
-      throw new Error("脑库副本当前版本与待更新远端版本不是快进关系，为保护本地提交已取消更新。请先备份或检查该副本后重试。");
-    }
-    const dirtyAfterFetch = git(["status", "--porcelain", "--untracked-files=all"], { cwd: target });
-    let dirtyIndexAfterFetch = false;
     try {
-      rejectHiddenIndexChanges({ cwd: target });
-    } catch {
-      dirtyIndexAfterFetch = true;
+      log("脑库副本已存在，拉取远端最新并重放 sparse 规则…");
+      git(["fetch", "--depth", "1", "--no-tags", repo, fetchRefspec], { cwd: target });
+      let fetched = git(["rev-parse", fetchRef], { cwd: target });
+      let refreshedBase = git(["merge-base", head, fetched], { cwd: target, allowFail: true });
+      const isShallow = git(["rev-parse", "--is-shallow-repository"], { cwd: target }) === "true";
+      let historyCount = Number(git(["rev-list", "--count", fetched], { cwd: target }));
+      for (let depth = 1; isShallow && head !== fetched && refreshedBase !== head; depth *= 4) {
+        git(["fetch", "--deepen=" + depth, "--no-tags", repo, fetchRefspec], { cwd: target });
+        fetched = git(["rev-parse", fetchRef], { cwd: target });
+        refreshedBase = git(["merge-base", head, fetched], { cwd: target, allowFail: true });
+        if (refreshedBase === head) break;
+        const nextHistoryCount = Number(git(["rev-list", "--count", fetched], { cwd: target }));
+        if (nextHistoryCount <= historyCount) break;
+        historyCount = nextHistoryCount;
+      }
+      if (head !== fetched && refreshedBase !== head) {
+        throw new Error("脑库副本当前版本与待更新远端版本不是快进关系，为保护本地提交已取消更新。请先备份或检查该副本后重试。");
+      }
+      const dirtyAfterFetch = git(["status", "--porcelain", "--untracked-files=all"], { cwd: target });
+      let dirtyIndexAfterFetch = false;
+      try {
+        rejectHiddenIndexChanges({ cwd: target });
+      } catch {
+        dirtyIndexAfterFetch = true;
+      }
+      if (dirtyAfterFetch || dirtyIndexAfterFetch) {
+        throw new Error("脑库副本在检查期间出现本地改动，为保护本地内容已取消更新。请先备份或提交这些改动后重试。");
+      }
+      rejectIgnoredFileConflicts({ cwd: target, commit: fetched });
+      // 先重放 sparse 规则再重置工作树，避免旧规则把 90-图片 拉回来。
+      git(["sparse-checkout", "set", "--no-cone", ...SPARSE_PATTERNS], { cwd: target });
+      rejectIgnoredFileConflicts({ cwd: target, commit: fetched });
+      git(["reset", "--keep", fetched], { cwd: target });
+      git(["update-ref", upstreamRef, fetched, upstream], { cwd: target });
+    } finally {
+      git(["update-ref", "-d", fetchRef], { cwd: target, allowFail: true });
     }
-    if (dirtyAfterFetch || dirtyIndexAfterFetch) {
-      throw new Error("脑库副本在检查期间出现本地改动，为保护本地内容已取消更新。请先备份或提交这些改动后重试。");
-    }
-    rejectIgnoredFileConflicts({ cwd: target, commit: fetched });
-    // 先重放 sparse 规则再重置工作树，避免旧规则把 90-图片 拉回来。
-    git(["sparse-checkout", "set", "--no-cone", ...SPARSE_PATTERNS], { cwd: target });
-    rejectIgnoredFileConflicts({ cwd: target, commit: fetched });
-    git(["reset", "--keep", fetched], { cwd: target });
   }
 
   const commit = git(["rev-parse", "HEAD"], { cwd: target, allowFail: true });

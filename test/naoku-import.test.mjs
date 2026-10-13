@@ -212,6 +212,48 @@ test("vault refresh refuses assume-unchanged edits under the sparse image direct
   }
 });
 
+test("vault refresh refuses modified skip-worktree files outside sparse paths", async (t) => {
+  const root = tempRoot(t);
+  const restoreEnvironment = isolateGitEnvironment(root);
+  try {
+    const { upstream, seed } = createRemote(root);
+    const relPath = "Synthetic-note.md";
+    fs.writeFileSync(path.join(seed, relPath), "# Synthetic initial note\n", "utf8");
+    git(["add", relPath], seed);
+    git(["commit", "-m", "add synthetic root note"], seed);
+    git(["push", "origin", "main"], seed);
+    const vault = path.join(root, "vault");
+    git(["clone", "--depth", "1", "--filter=blob:none", pathToFileURL(upstream).href, vault]);
+    const note = path.join(vault, relPath);
+    const headBefore = git(["rev-parse", "HEAD"], vault);
+    const upstreamBefore = git(["rev-parse", "@{upstream}"], vault);
+    const localContent = "# Synthetic hidden local edit\n";
+    git(["update-index", "--skip-worktree", "--", relPath], vault);
+    assert.equal(git(["ls-files", "-v", "-z", "--", relPath], vault).slice(0, 1), "S");
+    fs.writeFileSync(note, localContent, "utf8");
+    assert.equal(git(["status", "--porcelain", "--untracked-files=all"], vault), "");
+
+    fs.writeFileSync(path.join(seed, relPath), "# Synthetic upstream edit\n", "utf8");
+    git(["add", "."], seed);
+    git(["commit", "-m", "update synthetic hidden file"], seed);
+    git(["push", "origin", "main"], seed);
+
+    let failure;
+    try {
+      await importVault({ dir: vault, repo: pathToFileURL(upstream).href });
+    } catch (error) {
+      failure = error;
+    }
+
+    assert.match(String(failure?.message ?? ""), /索引标记/);
+    assert.equal(fs.readFileSync(note, "utf8"), localContent);
+    assert.equal(git(["rev-parse", "HEAD"], vault), headBefore);
+    assert.equal(git(["rev-parse", "@{upstream}"], vault), upstreamBefore);
+  } finally {
+    restoreEnvironment();
+  }
+});
+
 test("vault refresh refuses modified skip-worktree files under the sparse image directory", async (t) => {
   const root = tempRoot(t);
   const restoreEnvironment = isolateGitEnvironment(root);
@@ -323,6 +365,7 @@ test("clean shallow vault behind an already-fetched upstream still refreshes", a
     assert.equal(failure, undefined, `clean behind-upstream refresh failed: ${failure?.message ?? "unknown error"}`);
     assert.equal(result.commit, trackingHead);
     assert.equal(fs.readFileSync(path.join(vault, "20-考点", "Synthetic.md"), "utf8"), "# Synthetic upstream v3\n");
+    assert.equal(git(["for-each-ref", "--format=%(refname)", "refs/exam-workbench/naoku-refresh"], vault), "");
   } finally {
     restoreEnvironment();
   }
@@ -373,6 +416,7 @@ test("refresh stops when the upstream has unrelated history", async (t) => {
     const vault = path.join(root, "vault");
     cloneVault(upstream, vault);
     const headBefore = git(["rev-parse", "HEAD"], vault);
+    const upstreamBefore = git(["rev-parse", "@{upstream}"], vault);
     const replacement = path.join(root, "replacement");
     fs.mkdirSync(replacement);
     git(["init", "--initial-branch=main"], replacement);
@@ -394,6 +438,8 @@ test("refresh stops when the upstream has unrelated history", async (t) => {
 
     assert.match(String(failure?.message ?? ""), /不是快进关系/);
     assert.equal(git(["rev-parse", "HEAD"], vault), headBefore);
+    assert.equal(git(["rev-parse", "@{upstream}"], vault), upstreamBefore);
+    assert.equal(git(["for-each-ref", "--format=%(refname)", "refs/exam-workbench/naoku-refresh"], vault), "");
     assert.equal(fs.readFileSync(path.join(vault, "20-考点", "Synthetic.md"), "utf8"), "# Synthetic upstream v1\n");
   } finally {
     restoreEnvironment();
