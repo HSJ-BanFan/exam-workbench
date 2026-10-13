@@ -33,6 +33,9 @@ jobs:
       - name: Naoku import regression
         run: npm run test:naoku-import
 
+      - name: Package privacy regression
+        run: npm run test:package-privacy
+
       - name: Syntax check
         shell: pwsh
         run: |
@@ -44,6 +47,9 @@ jobs:
 
       - name: Package (win32-x64 portable)
         run: npm run pack
+
+      - name: Verify packaged private-file exclusions
+        run: node scripts/verify-package-privacy.mjs dist/exam-workbench-win32-x64
 
       - name: Zip
         shell: pwsh
