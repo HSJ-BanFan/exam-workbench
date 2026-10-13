@@ -25,6 +25,15 @@ test("pack command explicitly ignores local config, session, and local JSON file
   assert.doesNotMatch(packageJson.scripts.pack, /--overwrite(?:\s|$)/);
 });
 
+test("runtime dependencies remain blocked until a trusted package file inventory exists", () => {
+  for (const field of ["dependencies", "optionalDependencies", "peerDependencies"]) {
+    assert.deepEqual(packageJson[field] ?? {}, {}, `${field} requires a trusted package file inventory`);
+  }
+  for (const field of ["bundleDependencies", "bundledDependencies"]) {
+    assert.deepEqual(packageJson[field] ?? [], [], `${field} requires a trusted package file inventory`);
+  }
+});
+
 test("package preflight refuses an existing output without changing its contents", (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "exam-workbench-package-output-"));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
