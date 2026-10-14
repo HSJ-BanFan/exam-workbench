@@ -254,6 +254,51 @@ test("vault refresh refuses modified skip-worktree files outside sparse paths", 
   }
 });
 
+test("vault refresh refuses staged skip-worktree images when the working file is absent", async (t) => {
+  const root = tempRoot(t);
+  const restoreEnvironment = isolateGitEnvironment(root);
+  try {
+    const { upstream, seed } = createRemote(root);
+    const vault = path.join(root, "vault");
+    cloneVault(upstream, vault);
+    const relPath = "90-图片/Synthetic.md";
+    const image = path.join(vault, relPath);
+    const headBefore = git(["rev-parse", "HEAD"], vault);
+    const upstreamBefore = git(["rev-parse", "@{upstream}"], vault);
+    const headBlob = git(["rev-parse", `HEAD:${relPath}`], vault);
+    fs.mkdirSync(path.dirname(image), { recursive: true });
+    fs.writeFileSync(image, "# Synthetic staged image edit\n", "utf8");
+    const stagedBlob = git(["hash-object", "-w", "--path=" + relPath, "--", relPath], vault);
+    git(["update-index", "--cacheinfo", `100644,${stagedBlob},${relPath}`], vault);
+    git(["update-index", "--skip-worktree", "--", relPath], vault);
+    fs.rmSync(image);
+
+    assert.notEqual(stagedBlob, headBlob);
+    assert.match(git(["ls-files", "-v", "--", relPath], vault), /^S /);
+    assert.equal(fs.existsSync(image), false);
+    assert.match(git(["status", "--porcelain", "--untracked-files=all"], vault), /^M /);
+
+    fs.writeFileSync(path.join(seed, "20-考点", "Synthetic.md"), "# Synthetic upstream v2\n", "utf8");
+    git(["add", "."], seed);
+    git(["commit", "-m", "advance synthetic upstream"], seed);
+    git(["push", "origin", "main"], seed);
+
+    let failure;
+    try {
+      await importVault({ dir: vault, repo: pathToFileURL(upstream).href });
+    } catch (error) {
+      failure = error;
+    }
+
+    assert.match(String(failure?.message ?? ""), /未提交的本地改动/);
+    assert.equal(git(["rev-parse", "HEAD"], vault), headBefore);
+    assert.equal(git(["rev-parse", "@{upstream}"], vault), upstreamBefore);
+    assert.equal(git(["rev-parse", ":" + relPath], vault), stagedBlob);
+  } finally {
+    restoreEnvironment();
+  }
+});
+
 test("vault refresh refuses modified skip-worktree files under the sparse image directory", async (t) => {
   const root = tempRoot(t);
   const restoreEnvironment = isolateGitEnvironment(root);
