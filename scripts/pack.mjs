@@ -232,7 +232,7 @@ export function pack({ checkoutRoot, outputDir }) {
   const stageRoot = fs.mkdtempSync(path.join(outputParent, ".exam-workbench-stage-"));
   try {
     writeStage(plan, stageRoot);
-    const packagerCli = path.join(root, "node_modules", "@electron", "packager", "dist", "cli.js");
+    const packagerCli = path.join(root, "node_modules", "@electron", "packager", "bin", "electron-packager.mjs");
     const packagerOutput = execFileSync(process.execPath, [
       packagerCli,
       stageRoot,
@@ -240,8 +240,8 @@ export function pack({ checkoutRoot, outputDir }) {
       "--platform=win32",
       "--arch=x64",
       `--out=${outputParent}`,
-      "--prune=true",
-      "--asar=true",
+      "--prune",
+      "--asar",
     ], { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "inherit"], windowsHide: true });
 
     process.stdout.write(packagerOutput);
