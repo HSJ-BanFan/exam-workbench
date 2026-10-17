@@ -6,10 +6,6 @@ import { isDeepStrictEqual } from "node:util";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { APP_ASAR_MANIFEST, applyPackagerPackageJsonPolicy, PACKAGER_PACKAGE_JSON_POLICY } from "./package-asar-manifest.mjs";
 
-/** @typedef {{ spec: (typeof APP_ASAR_MANIFEST)[number], blob: string, expectedBytes: Buffer, expectedPackageJson: object | null }} PlannedAsarFile */
-/** @typedef {{ commitSha: string, entries: readonly PlannedAsarFile[] }} PackagePlan */
-/** @typedef {{ outputDir: string, commitSha: string, appAsarEntryCount: number }} PackResult */
-
 const EXPECTED_OUTPUT_NAME = "exam-workbench-win32-x64";
 const PACKAGER_NAME = "exam-workbench";
 const thisFile = fileURLToPath(import.meta.url);
