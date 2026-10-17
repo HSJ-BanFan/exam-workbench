@@ -31,6 +31,7 @@ your mistakes.*
 
 - 只调用**读取**接口：不提交答案、不删除错题、不发布任何内容
 - 仓库与导出不含登录凭据；输出前脱敏账号字段（手机号等）
+- 便携包构建显式排除本地 `config.json`、`session.json`、`saduck-session.json` 与 `*.local.json`，并检查最终包清单
 - HTTP 接口仅在 `127.0.0.1` 监听；不提供批量导出题库的功能
 - 未练习过的题目内容（尤其申论材料/参考答案）受平台权限限制，取不到就不取
 
@@ -127,6 +128,7 @@ exam-workbench.exe --naoku-import
 导入用稀疏克隆（`--depth 1 --filter=blob:none --sparse`），**默认排除 `90-图片`**（21,829 张第三方
 配图，约 207MB）。索引写在 `脑库索引/`，只含连接关系与考点母题摘要（截断到 300 字符），不含题面原文；
 题面仍用 `/api/tiku/questions` 按题号取。
+已有副本更新前会检查工作树改动、Git 索引保护标记、提交历史和被忽略文件是否与远端路径冲突；发现本地内容风险会取消更新并保留本地文件与提交。稀疏检出规则须保持工作台默认设置；自定义规则会被安全拒绝。落后于已跟踪远端的干净副本仍可继续更新。
 
 副本刻意不放进数据目录：数据目录通常位于 Obsidian 库内，而脑库是 2 万余篇外来笔记，落进去会污染库图谱，
 并让库校验器把每篇都判为 `type 无效`。要换位置就改 `%APPDATA%\备考工作台\config.json` 里的 `naokuDir`
@@ -217,9 +219,12 @@ Claude Code（项目根 `.mcp.json`）：
 
 ## 开发与验证
 
+本地打包只收录固定的 20 个应用文件，并从当前 HEAD 的 Git blob 创建暂存目录；缺失、修改或符号链接的清单文件会使打包失败。打包后会核对 app.asar 的完整路径集合和每个文件的内容，并按锁定的 Electron Packager 版本检查 `package.json` 清理结果。清单之外的源码、练习数据和脑库副本不会进入 app.asar。当前项目没有运行时依赖；新增依赖前必须把所需文件加入可信清单，否则打包会失败。为保护已有文件，打包不会覆盖输出目录；默认输出为 `dist/exam-workbench-win32-x64`，也可用 `npm run pack -- --out <完整输出目录>` 指定其他位置，目录名必须是 `exam-workbench-win32-x64`。
+
 ```powershell
 npm start                       # 开发运行
 npm run pack                    # 打包
+npm run test:naoku-import      # 合成本地 Git 远端回归测试，不访问真实数据或网络
 node scripts/dev-sync-test.mjs  # 不用 UI 直接跑同步引擎（SESSION_PATH 指向会话文件）
 node scripts/api-test.mjs       # 启动应用并自动化测试 HTTP 接口（含 /api/agent 与 MCP 冒烟）
 node scripts/naoku-test.mjs     # 脑库索引自测（合成 fixture；带 NAOKU_VAULT=<路径> 时对真实副本再跑一遍）
@@ -232,7 +237,7 @@ npx electron . --naoku-import   # 无窗口导入脑库副本并重建索引
 
 仓库自带 [`.github/workflows/build.yml`](.github/workflows/build.yml)，在 windows runner 上自动构建便携版：
 
-- **PR / push**：每次提交自动构建并上传构建产物（Actions 运行页可下载 zip）
+- **PR / push**：每次提交自动构建并上传 Windows 便携 ZIP、SHA-256 和构建说明；Actions artifact 名称含版本与短 SHA
 - **合并到 main**：自动更新预发布 [`main-latest`](https://github.com/HSJ-BanFan/exam-workbench/releases/tag/main-latest)，始终可下载最新的开发版
 - **推送 `v*` 标签**：发布正式 Release 并附带 zip（要求标签与 `package.json` 的 `version` 一致）
 

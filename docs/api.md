@@ -112,8 +112,9 @@
 
 ### `POST /api/naoku/import` / `POST /api/naoku/index`
 
-`import` 幂等：目录无 `.git` 时按 `--depth 1 --filter=blob:none --sparse` 克隆，已存在时
-`fetch --depth 1` + 重放 sparse 规则 + `reset --hard FETCH_HEAD`（不递归删除任何目录）。
+`import` 幂等：目录无 `.git` 时按 `--depth 1 --filter=blob:none --sparse` 克隆。已存在的副本会先检查
+`git status --porcelain --untracked-files=all`、索引保护标记和提交关系；有未提交改动、本地提交分叉，或被忽略的本地文件与远端路径冲突时请求失败并保留本地内容。落后于已跟踪远端的干净副本可以继续更新。
+副本须保持工作台默认 sparse 规则（`/*` 与 `!/90-图片/`）；自定义规则会被拒绝，以免改写用户的索引或文件布局。通过检查后，程序先把最新提交取到临时引用，再以 compare-and-swap 更新跟踪引用；复核本地状态后才运行 `reset --keep`。如果复核或 reset 失败，程序会尽力恢复跟踪引用，并保留并发产生的外部引用更新。
 
 ```json
 { "ok": true, "dir": "D:\\Documents\\fenbi-sync\\考公脑库", "repo": "https://github.com/ERRRC/kaogongzhentizhengliu.git", "commit": "84ab93d4b6…", "cloned": false }
