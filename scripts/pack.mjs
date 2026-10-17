@@ -232,11 +232,18 @@ export function pack({ checkoutRoot, outputDir }) {
   const stageRoot = fs.mkdtempSync(path.join(outputParent, ".exam-workbench-stage-"));
   try {
     writeStage(plan, stageRoot);
+    const electronVersion = JSON.parse(
+      fs.readFileSync(path.join(root, "node_modules", "electron", "package.json"), "utf8"),
+    ).version;
+    if (typeof electronVersion !== "string" || !electronVersion) {
+      throw new Error("installed Electron package does not declare a version");
+    }
     const packagerCli = path.join(root, "node_modules", "@electron", "packager", "bin", "electron-packager.mjs");
     const packagerOutput = execFileSync(process.execPath, [
       packagerCli,
       stageRoot,
       PACKAGER_NAME,
+      `--electron-version=${electronVersion}`,
       "--platform=win32",
       "--arch=x64",
       `--out=${outputParent}`,

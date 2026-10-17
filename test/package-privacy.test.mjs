@@ -13,6 +13,9 @@ const checkoutRoot = fileURLToPath(new URL("../", import.meta.url));
 const require = createRequire(new URL("../package.json", import.meta.url));
 const { createPackage } = require("@electron/asar");
 const packageJson = JSON.parse(fs.readFileSync(path.join(checkoutRoot, "package.json"), "utf8"));
+const installedElectronVersion = JSON.parse(
+  fs.readFileSync(path.join(checkoutRoot, "node_modules", "electron", "package.json"), "utf8"),
+).version;
 const syntheticPackageJson = {
   name: "exam-workbench",
   version: "0.0.0",
@@ -42,6 +45,9 @@ function createSyntheticCheckout() {
   const packagerDir = path.join(root, "node_modules", "@electron", "packager");
   fs.mkdirSync(packagerDir, { recursive: true });
   fs.writeFileSync(path.join(packagerDir, "package.json"), JSON.stringify({ version: "20.3.0" }));
+  const electronDir = path.join(root, "node_modules", "electron");
+  fs.mkdirSync(electronDir, { recursive: true });
+  fs.writeFileSync(path.join(electronDir, "package.json"), JSON.stringify({ version: installedElectronVersion }));
   fs.writeFileSync(path.join(root, "package.json"), `${JSON.stringify(syntheticPackageJson, null, 2)}\n`);
   for (const spec of APP_ASAR_MANIFEST) {
     if (spec.sourcePath === "package.json") continue;
@@ -78,6 +84,10 @@ const appName = args[1];
 const outputRoot = args.find((value) => value.startsWith("--out=")).slice("--out=".length);
 const platform = args.find((value) => value.startsWith("--platform=")).slice("--platform=".length);
 const arch = args.find((value) => value.startsWith("--arch=")).slice("--arch=".length);
+const electronVersionArgument = args.find((value) => value.startsWith("--electron-version="));
+if (!electronVersionArgument) throw new Error("Cannot find module 'electron/package.json'");
+const electronVersion = JSON.parse(fs.readFileSync(path.join(${JSON.stringify(root)}, "node_modules", "electron", "package.json"), "utf8")).version;
+if (electronVersionArgument !== "--electron-version=" + electronVersion) throw new Error("Packager received an Electron version that does not match the installed package");
 const packageDir = path.join(outputRoot, appName + "-" + platform + "-" + arch);
 const appDir = path.join(path.dirname(packageDir), ".synthetic-packager-app");
 fs.cpSync(sourceRoot, appDir, { recursive: true });
@@ -185,7 +195,7 @@ test("package plan stages pinned HEAD blobs and accepts an exact synthetic archi
   });
 });
 
-test("pack builds only its pinned manifest and excludes untracked and extra tracked files", (t) => {
+test("pack passes the installed Electron version and excludes untracked and extra tracked files", (t) => {
   const root = createSyntheticCheckout();
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   installSyntheticPackager(root);
