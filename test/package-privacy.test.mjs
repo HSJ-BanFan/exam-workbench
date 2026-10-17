@@ -198,16 +198,24 @@ test("package plan stages pinned HEAD blobs and accepts an exact synthetic archi
 test("package plan accepts a filesystem alias for the checkout root", (t) => {
   const root = createSyntheticCheckout();
   const alias = path.join(os.tmpdir(), `exam-workbench-package-plan-alias-${process.pid}-${Date.now()}`);
-  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
-  t.after(() => fs.rmSync(alias, { force: true }));
+  t.after(() => {
+    fs.rmSync(alias, { force: true });
+    fs.rmSync(root, { recursive: true, force: true });
+  });
   fs.symlinkSync(root, alias, process.platform === "win32" ? "junction" : "dir");
 
   assert.notEqual(path.resolve(alias), path.resolve(root));
   assert.equal(fs.realpathSync(alias), fs.realpathSync(root));
   const plan = createPackagePlan({ checkoutRoot: alias });
   assert.equal(plan.entries.length, APP_ASAR_MANIFEST.length);
+  if (process.platform === "win32") {
+    const caseVariant = root.replace(/^[A-Z]:/, (drive) => drive.toLowerCase());
+    assert.notEqual(caseVariant, root);
+    const caseVariantPlan = createPackagePlan({ checkoutRoot: caseVariant });
+    assert.equal(caseVariantPlan.entries.length, APP_ASAR_MANIFEST.length);
+  }
   assert.throws(
-    () => createPackagePlan({ checkoutRoot: path.join(root, "src") }),
+    () => createPackagePlan({ checkoutRoot: path.join(alias, "src") }),
     /checkout root does not match Git top level:/,
   );
 });
