@@ -219,7 +219,7 @@ Claude Code（项目根 `.mcp.json`）：
 
 ## 开发与验证
 
-本地打包要求已跟踪文件与 HEAD 内容一致，并检查源码目录里的未跟踪文件和已暂存新增文件，防止把练习数据或脑库副本一起装入程序；app.asar 只接受已跟踪源码，并排除 npm 生成的 node_modules/.package-lock.json，不豁免整个 node_modules。当前没有运行时依赖；若增加依赖，必须先设计可信的依赖文件校验，否则打包会失败。本地配置、会话和明确排除的构建目录不影响打包。为保护已有文件，打包不会覆盖 dist/exam-workbench-win32-x64；目标目录已存在时会停止，请先手动备份或移走旧目录。
+本地打包只收录固定的 20 个应用文件，并从当前 HEAD 的 Git blob 创建暂存目录；缺失、修改或符号链接的清单文件会使打包失败。打包后会核对 app.asar 的完整路径集合和每个文件的内容，并按锁定的 Electron Packager 版本检查 `package.json` 清理结果。清单之外的源码、练习数据和脑库副本不会进入 app.asar。当前项目没有运行时依赖；新增依赖前必须把所需文件加入可信清单，否则打包会失败。为保护已有文件，打包不会覆盖输出目录；默认输出为 `dist/exam-workbench-win32-x64`，也可用 `npm run pack -- --out <完整输出目录>` 指定其他位置，目录名必须是 `exam-workbench-win32-x64`。
 
 ```powershell
 npm start                       # 开发运行
