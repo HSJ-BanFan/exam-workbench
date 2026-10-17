@@ -81,8 +81,8 @@ function readWorkingFile(checkoutRoot, sourcePath, expectedBlob) {
 }
 
 export function createPackagePlan({ checkoutRoot }) {
-  const root = fs.realpathSync(path.resolve(checkoutRoot));
-  const topLevel = fs.realpathSync(gitText(root, ["rev-parse", "--show-toplevel"]));
+  const root = fs.realpathSync.native(path.resolve(checkoutRoot));
+  const topLevel = fs.realpathSync.native(gitText(root, ["rev-parse", "--show-toplevel"]));
   if (topLevel !== root) throw new Error(`checkout root does not match Git top level: ${topLevel}`);
 
   assertPackagerVersion(root);
