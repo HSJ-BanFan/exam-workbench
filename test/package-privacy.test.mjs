@@ -62,7 +62,7 @@ function createSyntheticCheckout() {
 }
 
 function installSyntheticPackager(root) {
-  const cliPath = path.join(root, "node_modules", "@electron", "packager", "dist", "cli.js");
+  const cliPath = path.join(root, "node_modules", "@electron", "packager", "bin", "electron-packager.mjs");
   fs.mkdirSync(path.dirname(cliPath), { recursive: true });
   fs.writeFileSync(cliPath, `import { createRequire } from "node:module";
 import fs from "node:fs";
