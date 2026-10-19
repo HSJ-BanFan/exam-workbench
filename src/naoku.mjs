@@ -199,8 +199,18 @@ export async function importVault({ dir, repo = DEFAULT_REPO, log = logNothing, 
           throw new Error("脑库副本在检查期间出现本地改动，为保护本地内容已取消更新。请先备份或提交这些改动后重试。");
         }
         rejectIgnoredFileConflicts({ cwd: target, commit: fetched });
+        const headBeforeAdvance = git(["rev-parse", "HEAD"], { cwd: target });
+        const trackingBeforeAdvance = git(["rev-parse", upstreamRef], { cwd: target });
+        if (headBeforeAdvance !== head || trackingBeforeAdvance !== fetched) {
+          throw new Error("脑库副本在更新期间发生了并发提交或跟踪引用变更，为保护本地状态已取消更新。");
+        }
         try {
-          runGit(["reset", "--keep", fetched], { cwd: target });
+          runGit(["merge", "--ff-only", fetchRef], { cwd: target });
+          const advancedHead = git(["rev-parse", "HEAD"], { cwd: target });
+          const advancedTracking = git(["rev-parse", upstreamRef], { cwd: target });
+          if (advancedHead !== fetched || advancedTracking !== fetched) {
+            throw new Error("脑库副本在快进更新期间发生了并发变化；已保留当前提交，请检查后重试。");
+          }
           trackingRefNeedsRollback = false;
         } catch (error) {
           const currentHead = git(["rev-parse", "HEAD"], { cwd: target, allowFail: true });

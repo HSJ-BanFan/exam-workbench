@@ -840,6 +840,56 @@ test("concurrent upstream ref updates are rejected before resetting the vault", 
   }
 });
 
+test("refresh preserves a local commit created immediately before advancing the vault", async (t) => {
+  const root = tempRoot(t);
+  const restoreEnvironment = isolateGitEnvironment(root);
+  try {
+    const { upstream, seed } = createRemote(root);
+    const vault = path.join(root, "vault");
+    cloneVault(upstream, vault);
+    git(["config", "user.name", "Synthetic Test"], vault);
+    git(["config", "user.email", "synthetic@example.invalid"], vault);
+
+    const note = path.join(vault, "20-考点", "Synthetic.md");
+    const localContent = "# Synthetic local commit\n";
+    fs.writeFileSync(path.join(seed, "20-考点", "Synthetic.md"), "# Synthetic upstream v2\n", "utf8");
+    git(["add", "."], seed);
+    git(["commit", "-m", "advance synthetic upstream"], seed);
+    git(["push", "origin", "main"], seed);
+    const upstreamHead = git(["rev-parse", "HEAD"], seed);
+    let concurrentHead = null;
+    let mergeReached = false;
+
+    const runGit = (args, options = {}) => {
+      if (!mergeReached && args[0] === "merge" && args[1] === "--ff-only") {
+        mergeReached = true;
+        fs.writeFileSync(note, localContent, "utf8");
+        git(["add", "20-考点/Synthetic.md"], vault);
+        git(["commit", "-m", "concurrent local commit"], vault);
+        concurrentHead = git(["rev-parse", "HEAD"], vault);
+      }
+      return git(args, options.cwd);
+    };
+
+    let failure;
+    try {
+      await importVault({ dir: vault, repo: pathToFileURL(upstream).href, runGit });
+    } catch (error) {
+      failure = error;
+    }
+
+    assert.ok(failure, "refresh must refuse a local commit that advances HEAD during the final update window");
+    assert.ok(mergeReached, "the race is injected after the explicit state check at the Git update boundary");
+    assert.ok(concurrentHead, "the synthetic local commit must be created");
+    assert.equal(git(["rev-parse", "HEAD"], vault), concurrentHead, "refresh must leave the concurrent commit on the branch");
+    assert.equal(fs.readFileSync(note, "utf8"), localContent, "refresh must preserve the concurrent commit's file contents");
+    assert.equal(git(["rev-parse", "@{upstream}"], vault), upstreamHead, "the fetched remote commit remains recorded while the local branch is preserved");
+    assert.equal(git(["status", "--porcelain", "--untracked-files=all"], vault), "");
+  } finally {
+    restoreEnvironment();
+  }
+});
+
 test("late ignored path conflicts roll back the refresh ref and preserve the sparse index", async (t) => {
   const root = tempRoot(t);
   const restoreEnvironment = isolateGitEnvironment(root);
